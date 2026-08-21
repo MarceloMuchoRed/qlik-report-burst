@@ -37,21 +37,31 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # CONFIG  ---  edit everything in this block, then run the script.
 # ==========================================================================
 
-# --- Your Qlik tenant + app --------------------------------------------------
-# Copy the first part of your Qlik URL from the browser address bar, e.g.
-#   https://yourcompany.us.qlikcloud.com   (no trailing slash)
-TENANT_URL = "https://YOURTENANT.REGION.qlikcloud.com"
+# --- Your Qlik server + app --------------------------------------------------
+# The host portion of your Qlik URL, no trailing slash. This is set up for
+# Qlik Sense Enterprise on Windows (on-prem / client-managed), e.g.
+#   http://10.0.2.5
+# If your hub is reached through a virtual proxy PREFIX (e.g. your hub URL is
+#   http://10.0.2.5/sales/hub/...  ), include that prefix here too:
+#   TENANT_URL = "http://10.0.2.5/sales"
+# so the script builds .../sales/single/... instead of /single/.
+# (Qlik Sense Cloud users would instead use https://yourtenant.region.qlikcloud.com)
+TENANT_URL = "http://10.0.2.5"
 
-# The app (document) GUID. When you open the app, the URL looks like:
-#   .../sense/app/76daa5f7-c3b3-40a7-a8a1-8c1453b2acf6/sheet/....
+# The app (document) GUID. Open the app from the hub and read the URL:
+#   http://10.0.2.5/sense/app/76daa5f7-c3b3-40a7-a8a1-8c1453b2acf6/sheet/<SHEET_ID>/state/analysis
 # Paste the part between /app/ and /sheet/ here.
 APP_ID = "PASTE-APP-GUID-HERE"
 
 # What to capture. Use EITHER a single object OR a whole sheet:
-#   OBJECT_ID -> cleanest: a single chart/table. Get it via the chart's
-#                "..." menu -> Share/Embed, or the object id in the sheet URL.
+#   OBJECT_ID -> cleanest: a single chart/table. On-prem, get it from the
+#                Single Configurator in Dev Hub:
+#                  http://10.0.2.5/dev-hub/single-configurator
+#                Pick app -> sheet -> object; it previews and builds the exact
+#                /single/ URL, and shows the object id.
 #   SHEET_ID  -> screenshots the whole sheet page instead. Leave OBJECT_ID = ""
-#                and set SHEET_ID if you want the full dashboard sheet.
+#                and set SHEET_ID (the GUID after /sheet/ in the app URL) to
+#                capture the full dashboard sheet.
 OBJECT_ID = "PASTE-OBJECT-ID-HERE"
 SHEET_ID = ""  # optional alternative to OBJECT_ID
 

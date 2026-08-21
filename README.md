@@ -1,7 +1,11 @@
 # qlik-report-burst
 
-Automates the weekly manual job: for each employee, filter the Qlik Sense Cloud
+Automates the weekly manual job: for each employee, filter the Qlik Sense
 dashboard to that person, screenshot it, and email the image to them.
+
+Written for **Qlik Sense Enterprise on Windows (on-prem / client-managed)** —
+a hub reached at something like `http://10.0.2.5/hub/`. (It also works against
+Qlik Sense Cloud; just point `TENANT_URL` at your `*.qlikcloud.com` tenant.)
 
 - **Filter** is applied via the Qlik Single Integration API URL (`&select=Field,Value`) — no fragile clicking in the filter pane.
 - **Login** is never scripted. You log in **once** in the browser the script opens; the session is remembered in a local profile folder. No password is stored.
@@ -43,13 +47,25 @@ header names must match `NAME_COLUMN` / `EMAIL_COLUMN` in the script:
 
 Open the script's `CONFIG` block and set:
 
-- **TENANT_URL** — the start of your Qlik URL, e.g. `https://yourco.us.qlikcloud.com`.
-- **APP_ID** — from the app URL: `.../sense/app/<APP_ID>/sheet/<SHEET_ID>/...`
-- **OBJECT_ID** — the chart to capture. Open the sheet, click the chart's `•••`
-  menu → **Share / Embed**, and copy the object id. (Or leave `OBJECT_ID = ""`
-  and set **SHEET_ID** to screenshot the whole sheet instead.)
+- **TENANT_URL** — the host part of your Qlik URL, no trailing slash, e.g.
+  `http://10.0.2.5`. If your hub is behind a virtual proxy **prefix** (hub URL
+  looks like `http://10.0.2.5/sales/hub/…`), include it: `http://10.0.2.5/sales`
+  — the script builds `.../sales/single/…` from it. With no prefix (your case),
+  it builds `http://10.0.2.5/single/…`.
+- **APP_ID** — open the app from the hub and read the URL:
+  `http://10.0.2.5/sense/app/<APP_ID>/sheet/<SHEET_ID>/state/analysis`. Paste the
+  GUID between `/app/` and `/sheet/`.
+- **OBJECT_ID** — the chart to capture. On-prem, use the **Single Configurator**
+  in Dev Hub: `http://10.0.2.5/dev-hub/single-configurator`. Pick app → sheet →
+  object; it live-previews and builds the exact `/single/` URL and shows the
+  object id. (If Dev Hub is disabled by your admin, leave `OBJECT_ID = ""` and set
+  **SHEET_ID** — the GUID after `/sheet/` in the app URL — to screenshot the whole
+  sheet instead.)
 - **FILTER_FIELD** — the field you change today, spelled exactly as Qlik shows
   it (case-sensitive), e.g. `Employee Name`.
+
+The script then requests, per employee:
+`http://10.0.2.5/single/?appid=<APP_ID>&obj=<OBJECT_ID>&select=<FILTER_FIELD>,<Employee>&opt=nointeraction`
 
 ## 4. Test on demand (safe defaults are already set)
 
@@ -90,6 +106,8 @@ run and re-login when prompted.
   `RENDER_SETTLE_SECONDS`, or set `READY_SELECTOR` to a CSS selector that only
   appears once your specific chart is fully rendered.
 - Don't delete `.browser-profile\` — that's what keeps you logged in.
-- This path does **not** depend on Qlik Automate/Reporting being enabled. If your
-  admin turns those on, a native server-side "burst report" would be even lower
-  maintenance — worth checking (hub → **Automations**; sheet `•••` → **Subscribe**).
+- This path does **not** depend on any extra Qlik reporting product. On on-prem,
+  the native server-side equivalent of a "burst report" is **Qlik NPrinting** (a
+  separately licensed/installed add-on that can filter per recipient and email
+  PDFs/images on a schedule). If your site already runs NPrinting, that would be
+  lower maintenance than this script — worth checking with your admin.
