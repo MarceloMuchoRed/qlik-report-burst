@@ -29,6 +29,10 @@ import sys
 import time
 from urllib.parse import quote
 
+# Folder this script lives in; all default paths below are relative to it so
+# the project stays portable (works wherever the repo is cloned).
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # ==========================================================================
 # CONFIG  ---  edit everything in this block, then run the script.
 # ==========================================================================
@@ -57,7 +61,8 @@ FILTER_FIELD = "Employee Name"
 
 # --- Your recipient spreadsheet ---------------------------------------------
 # Path to your employee -> email list. .xlsx (needs openpyxl) or .csv both work.
-RECIPIENTS_FILE = r"C:\Users\PEN - 009\qlik-report-burst\recipients.xlsx"
+# Defaults to recipients.xlsx sitting next to this script.
+RECIPIENTS_FILE = os.path.join(SCRIPT_DIR, "recipients.xlsx")
 # The column headers in that file:
 NAME_COLUMN = "Employee"      # the value that gets put into the Qlik filter
 EMAIL_COLUMN = "Email"        # where the screenshot is sent
@@ -83,11 +88,11 @@ TEST_REDIRECT_EMAIL = "marcelo@pennrosefarms.com"
 MAX_EMPLOYEES = 2
 
 # --- Rendering / browser ----------------------------------------------------
-# Where the screenshots are written.
-OUTPUT_DIR = r"C:\Users\PEN - 009\qlik-report-burst\screenshots"
+# Where the screenshots are written (next to this script by default).
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "screenshots")
 # Persistent browser profile (holds your Qlik login between runs). Don't delete
 # this folder or you'll have to log in again.
-PROFILE_DIR = r"C:\Users\PEN - 009\qlik-report-burst\.browser-profile"
+PROFILE_DIR = os.path.join(SCRIPT_DIR, ".browser-profile")
 # Seconds to wait after the chart appears, for animations/data to settle.
 RENDER_SETTLE_SECONDS = 4
 # Optional: a CSS selector that only appears once the chart is fully drawn.
