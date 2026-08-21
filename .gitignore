@@ -1,0 +1,16 @@
+# --- Run output ---------------------------------------------------------
+screenshots/
+
+# --- Qlik login session (NEVER commit — holds your authenticated profile) --
+.browser-profile/
+
+# --- Recipient data (employee names + emails; keep out of the repo) --------
+recipients.xlsx
+recipients.xlsm
+recipients.csv
+
+# --- Python --------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
