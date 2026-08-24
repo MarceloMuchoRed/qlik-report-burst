@@ -132,6 +132,12 @@ CHROME_PROFILE = "Default"
 USE_PROFILE_COPY = True
 # Where the private profile copy lives (recreated each run; gitignored).
 AUTOMATION_USER_DATA_DIR = os.path.join(SCRIPT_DIR, ".chrome-automation")
+# Some antivirus/EDR products TERMINATE any process that reads Chrome's saved-
+# password file ("Login Data") because that's what password-stealing malware
+# does. If the run dies right after "copying saved login ...", set this False:
+# the script then relies on your live session COOKIE instead (no autofill on the
+# login page — but if the cookie carries over, you won't see a login page).
+COPY_LOGIN_DATA = True
 # (Only used when USE_PROFILE_COPY = False.) Chrome locks a profile while it's
 # open, so the real profile must be CLOSED during a run. NOTE: Chrome leaves
 # BACKGROUND processes running even after you close every window, and they still
@@ -316,25 +322,37 @@ def build_profile_copy():
         shutil.rmtree(dst_root, ignore_errors=True)
     os.makedirs(os.path.join(dst_prof, "Network"), exist_ok=True)
 
-    def _copy(src, dst):
+    def _copy(src, dst, label):
+        """Copy one file if present, printing before each so that if the VM's
+        antivirus kills us mid-copy, the LAST 'copying ...' line names the file
+        that triggered it."""
+        if not os.path.exists(src):
+            return
+        print(f"   copying {label} ...", flush=True)
         try:
-            if os.path.exists(src):
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.copy2(src, dst)
-        except OSError:
-            pass  # locked/unreadable -> skip
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+        except OSError as e:
+            print(f"   ! could not copy {label}: {e}")
 
     # Top-level key material needed to decrypt cookies / saved passwords.
     _copy(os.path.join(src_root, "Local State"),
-          os.path.join(dst_root, "Local State"))
-    # Per-profile session + credentials (into the copy's "Default").
+          os.path.join(dst_root, "Local State"), "Local State (keys)")
+    # Session cookies (what lets us skip the login entirely).
     for rel in ("Network/Cookies", "Network/Cookies-journal",
                 "Network/Cookies-wal", "Network/Cookies-shm",
-                "Cookies", "Cookies-journal",
-                "Login Data", "Login Data-journal",
-                "Web Data", "Preferences", "Secure Preferences"):
-        parts = rel.split("/")
-        _copy(os.path.join(src_prof, *parts), os.path.join(dst_prof, *parts))
+                "Cookies", "Cookies-journal"):
+        _copy(os.path.join(src_prof, *rel.split("/")),
+              os.path.join(dst_prof, *rel.split("/")), f"cookies ({rel})")
+    _copy(os.path.join(src_prof, "Preferences"),
+          os.path.join(dst_prof, "Preferences"), "preferences")
+    _copy(os.path.join(src_prof, "Secure Preferences"),
+          os.path.join(dst_prof, "Secure Preferences"), "secure preferences")
+    # Saved passwords LAST (most likely to trip antivirus). Skippable.
+    if COPY_LOGIN_DATA:
+        for rel in ("Login Data", "Login Data-journal", "Web Data"):
+            _copy(os.path.join(src_prof, rel),
+                  os.path.join(dst_prof, rel), f"saved login ({rel})")
 
     _mark_profile_clean_exit(os.path.join(dst_prof, "Preferences"))
     return dst_root, "Default"
