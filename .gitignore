@@ -1,6 +1,9 @@
 # --- Run output ---------------------------------------------------------
 screenshots/
 
+# --- Private Chrome profile copy (holds copied cookies/login — NEVER commit) --
+.chrome-automation/
+
 # --- Recipient data --------------------------------------------------------
 # recipients.xlsx is committed with DUMMY test data so the repo runs on clone.
 # Replace it with the real list before going live (note: it IS tracked, so a

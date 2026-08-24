@@ -8,7 +8,8 @@ a hub reached at something like `http://10.0.2.5/hub/`. (It also works against
 Qlik Sense Cloud; just point `TENANT_URL` at your `*.qlikcloud.com` tenant.)
 
 - **Filter** is applied via the Qlik Single Integration API URL (`&select=Field,Value`) — no fragile clicking in the filter pane.
-- **Login** is never scripted and **no password is needed**. The script drives your **installed Chrome using your real Chrome profile**, so your saved Qlik login is already there — Chrome autofills it and you just press **Enter** once on the first run. Chrome must be **closed** while the script runs (it locks the profile). No password is stored.
+- **Login** is never scripted and **no password is needed**. The script drives your **installed Chrome using your Chrome profile** (with your saved Qlik login), so if a login form appears Chrome autofills it and you just press **Enter** once. No password is stored.
+  - By default (`USE_PROFILE_COPY = True`) it runs off a **private copy** of your profile, so your normal Chrome **can stay open** and nothing gets killed — best for locked-down machines. Set it `False` to use your real profile in place, which instead requires Chrome to be fully closed (`CLOSE_CHROME`).
 - **Email** goes through your already-signed-in **desktop Outlook** (COM automation) — no SMTP, app passwords, or OAuth.
 
 No admin rights required.

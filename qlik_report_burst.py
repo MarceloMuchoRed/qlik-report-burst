@@ -121,14 +121,23 @@ CHROME_USER_DATA_DIR = os.path.join(
 # open chrome://version and read "Profile Path" — the LAST path segment is this
 # value (e.g. ...\User Data\Default  ->  "Default").
 CHROME_PROFILE = "Default"
-# Chrome locks a profile while it's open, so Chrome must be CLOSED during a run.
-# NOTE: Chrome leaves BACKGROUND processes running even after you close every
-# window (the "keep running in background" setting + extensions), and they still
-# hold the lock — so True is the reliable default.
-#   True  -> the script force-closes Chrome (incl. those background processes)
-#            for you. Any open Chrome windows/tabs are closed. Recommended.
-#   False -> the script instead pauses and asks you to close Chrome yourself;
-#            useful if you never want the script killing your browser.
+# HOW the profile is used:
+#   True  -> RECOMMENDED. Copy the essential bits of your profile (cookies +
+#            saved login) into a private folder and drive Chrome from that COPY.
+#            Your real profile is never locked, so your normal Chrome can stay
+#            OPEN and nothing needs to be killed — best for locked-down VMs where
+#            Chrome processes can't be closed. (CLOSE_CHROME is then ignored.)
+#   False -> Use your real profile in place; requires Chrome fully CLOSED first
+#            (see CLOSE_CHROME), which is brittle if Chrome won't fully quit.
+USE_PROFILE_COPY = True
+# Where the private profile copy lives (recreated each run; gitignored).
+AUTOMATION_USER_DATA_DIR = os.path.join(SCRIPT_DIR, ".chrome-automation")
+# (Only used when USE_PROFILE_COPY = False.) Chrome locks a profile while it's
+# open, so the real profile must be CLOSED during a run. NOTE: Chrome leaves
+# BACKGROUND processes running even after you close every window, and they still
+# hold the lock — so True is the more reliable of the two.
+#   True  -> the script force-closes Chrome (incl. those background processes).
+#   False -> the script pauses and asks you to close Chrome yourself.
 CLOSE_CHROME = True
 # headless=False lets you see the one-time login and lets Chrome autofill work.
 # Once your session persists, you can set this True for silent scheduled runs.
@@ -253,9 +262,24 @@ def ensure_chrome_closed():
               " close Chrome fully and re-run (or set CLOSE_CHROME = True).")
 
 
+def _mark_profile_clean_exit(prefs_path):
+    """Set the profile's exit flags to 'clean' so Chrome shows no 'Restore
+    pages?' prompt and doesn't auto-reopen the previous tabs. Best-effort."""
+    try:
+        with open(prefs_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        prof = data.setdefault("profile", {})
+        prof["exit_type"] = "Normal"
+        prof["exited_cleanly"] = True
+        with open(prefs_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except (OSError, ValueError):
+        pass  # best-effort; --disable-session-crashed-bubble still helps
+
+
 def prepare_profile_for_automation():
-    """A force-killed Chrome leaves stale singleton lock files (in the User Data
-    root) and an 'exited_cleanly = false' flag in the profile. A freshly
+    """(In-place mode.) A force-killed Chrome leaves stale singleton lock files
+    (in the User Data root) and an 'exited_cleanly = false' flag. A freshly
     launched Chrome then hands the session off to the dead instance instead of
     letting Playwright drive it, so you get stuck on about:blank. Clear both so
     Chrome starts clean and Playwright controls the window."""
@@ -266,19 +290,54 @@ def prepare_profile_for_automation():
                 os.remove(p)
         except OSError:
             pass
-    # Mark the profile as cleanly exited -> no "Restore pages?" prompt and no
-    # auto-restore of the previous tabs.
-    prefs = os.path.join(CHROME_USER_DATA_DIR, CHROME_PROFILE, "Preferences")
-    try:
-        with open(prefs, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        prof = data.setdefault("profile", {})
-        prof["exit_type"] = "Normal"
-        prof["exited_cleanly"] = True
-        with open(prefs, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-    except (OSError, ValueError):
-        pass  # best-effort; --disable-session-crashed-bubble still helps
+    _mark_profile_clean_exit(
+        os.path.join(CHROME_USER_DATA_DIR, CHROME_PROFILE, "Preferences"))
+
+
+def build_profile_copy():
+    """(Copy mode.) Copy the essential parts of your real Chrome profile into a
+    private User Data dir so Playwright launches Chrome from the COPY. Your real
+    profile is never locked, so your normal Chrome can stay open and nothing has
+    to be killed. Returns (user_data_dir, profile_name); the copy is always a
+    "Default" profile regardless of the source profile's name.
+
+    Only small files are copied (cookies + saved login + prefs) — the big Cache
+    dirs are skipped. Files Chrome has locked are skipped best-effort; worst case
+    your Qlik session cookie doesn't copy and you land on the autofill login page
+    instead of a live session (still no password needed)."""
+    import shutil
+    src_root = CHROME_USER_DATA_DIR
+    src_prof = os.path.join(src_root, CHROME_PROFILE)
+    dst_root = AUTOMATION_USER_DATA_DIR
+    dst_prof = os.path.join(dst_root, "Default")
+
+    # Start fresh each run so we always pick up your current session/cookies.
+    if os.path.isdir(dst_root):
+        shutil.rmtree(dst_root, ignore_errors=True)
+    os.makedirs(os.path.join(dst_prof, "Network"), exist_ok=True)
+
+    def _copy(src, dst):
+        try:
+            if os.path.exists(src):
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+        except OSError:
+            pass  # locked/unreadable -> skip
+
+    # Top-level key material needed to decrypt cookies / saved passwords.
+    _copy(os.path.join(src_root, "Local State"),
+          os.path.join(dst_root, "Local State"))
+    # Per-profile session + credentials (into the copy's "Default").
+    for rel in ("Network/Cookies", "Network/Cookies-journal",
+                "Network/Cookies-wal", "Network/Cookies-shm",
+                "Cookies", "Cookies-journal",
+                "Login Data", "Login Data-journal",
+                "Web Data", "Preferences", "Secure Preferences"):
+        parts = rel.split("/")
+        _copy(os.path.join(src_prof, *parts), os.path.join(dst_prof, *parts))
+
+    _mark_profile_clean_exit(os.path.join(dst_prof, "Preferences"))
+    return dst_root, "Default"
 
 
 def ensure_logged_in(page):
@@ -376,22 +435,28 @@ def main():
           f"REVIEW_MODE={REVIEW_MODE}  "
           f"redirect={'ON -> ' + TEST_REDIRECT_EMAIL if TEST_REDIRECT_EMAIL else 'off'}")
 
-    ensure_chrome_closed()
-    prepare_profile_for_automation()
+    if USE_PROFILE_COPY:
+        print("Preparing a private copy of your Chrome profile "
+              "(your normal Chrome can stay open)...")
+        user_data_dir, profile = build_profile_copy()
+    else:
+        ensure_chrome_closed()
+        prepare_profile_for_automation()
+        user_data_dir, profile = CHROME_USER_DATA_DIR, CHROME_PROFILE
 
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        # Drive your INSTALLED Chrome (channel="chrome") using your real profile
-        # so the saved Qlik login / live session is already present. Passing the
-        # User Data root plus --profile-directory selects CHROME_PROFILE.
-        print(f"Launching Chrome (profile: {CHROME_PROFILE})...")
+        # Drive your INSTALLED Chrome (channel="chrome"). Whether against the
+        # real profile or a private copy, your saved Qlik login / live session
+        # rides along, so no password is ever needed.
+        print(f"Launching Chrome (profile: {profile})...")
         ctx = p.chromium.launch_persistent_context(
-            CHROME_USER_DATA_DIR,
+            user_data_dir,
             channel=BROWSER_CHANNEL,
             headless=HEADLESS,
             accept_downloads=False,
             args=[
-                f"--profile-directory={CHROME_PROFILE}",
+                f"--profile-directory={profile}",
                 "--disable-session-crashed-bubble",
                 "--hide-crash-restore-bubble",
                 "--no-first-run",
