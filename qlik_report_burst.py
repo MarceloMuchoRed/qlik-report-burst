@@ -26,6 +26,7 @@ Then edit the CONFIG block below and run:
 """
 
 import csv
+import json
 import os
 import subprocess
 import sys
@@ -225,10 +226,17 @@ def ensure_chrome_closed():
     if not chrome_is_running():
         return
     if CLOSE_CHROME:
-        print("Chrome is open; closing it so its profile can be used...")
-        subprocess.run(["taskkill", "/IM", "chrome.exe", "/F"],
+        print("Closing Chrome (incl. background processes) to free its profile...")
+        subprocess.run(["taskkill", "/IM", "chrome.exe", "/T", "/F"],
                        capture_output=True, text=True)
-        time.sleep(2)
+        # /F is asynchronous, so wait until the processes are actually gone.
+        for _ in range(20):
+            if not chrome_is_running():
+                break
+            time.sleep(0.5)
+        if chrome_is_running():
+            print(" ! Some chrome.exe could not be closed (likely another user's"
+                  " or protected). Continuing; if launch fails, restart the VM.")
         return
     print("\n" + "=" * 70)
     print(" Chrome is currently OPEN. It locks the profile this script needs.")
@@ -240,10 +248,40 @@ def ensure_chrome_closed():
               " close Chrome fully and re-run (or set CLOSE_CHROME = True).")
 
 
+def prepare_profile_for_automation():
+    """A force-killed Chrome leaves stale singleton lock files (in the User Data
+    root) and an 'exited_cleanly = false' flag in the profile. A freshly
+    launched Chrome then hands the session off to the dead instance instead of
+    letting Playwright drive it, so you get stuck on about:blank. Clear both so
+    Chrome starts clean and Playwright controls the window."""
+    for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        p = os.path.join(CHROME_USER_DATA_DIR, name)
+        try:
+            if os.path.lexists(p):
+                os.remove(p)
+        except OSError:
+            pass
+    # Mark the profile as cleanly exited -> no "Restore pages?" prompt and no
+    # auto-restore of the previous tabs.
+    prefs = os.path.join(CHROME_USER_DATA_DIR, CHROME_PROFILE, "Preferences")
+    try:
+        with open(prefs, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        prof = data.setdefault("profile", {})
+        prof["exit_type"] = "Normal"
+        prof["exited_cleanly"] = True
+        with open(prefs, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except (OSError, ValueError):
+        pass  # best-effort; --disable-session-crashed-bubble still helps
+
+
 def ensure_logged_in(page):
     """Navigate to the tenant and, if needed, pause for a one-time manual login."""
-    page.goto(TENANT_URL, wait_until="domcontentloaded")
+    print(f"Opening Qlik: {TENANT_URL}")
+    page.goto(TENANT_URL, wait_until="domcontentloaded", timeout=60000)
     time.sleep(3)
+    print(f"   landed at: {page.url}")
     if looks_like_login(page) or "hub" not in page.url.lower():
         print("\n" + "=" * 70)
         print(" A browser window is open. Please LOG IN to Qlik there now.")
@@ -334,21 +372,29 @@ def main():
           f"redirect={'ON -> ' + TEST_REDIRECT_EMAIL if TEST_REDIRECT_EMAIL else 'off'}")
 
     ensure_chrome_closed()
+    prepare_profile_for_automation()
 
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         # Drive your INSTALLED Chrome (channel="chrome") using your real profile
         # so the saved Qlik login / live session is already present. Passing the
         # User Data root plus --profile-directory selects CHROME_PROFILE.
+        print(f"Launching Chrome (profile: {CHROME_PROFILE})...")
         ctx = p.chromium.launch_persistent_context(
             CHROME_USER_DATA_DIR,
             channel=BROWSER_CHANNEL,
             headless=HEADLESS,
             accept_downloads=False,
-            args=[f"--profile-directory={CHROME_PROFILE}"],
+            args=[
+                f"--profile-directory={CHROME_PROFILE}",
+                "--disable-session-crashed-bubble",
+                "--hide-crash-restore-bubble",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ],
         )
-        # Use a fresh tab (don't grab a session-restored one from the profile).
-        page = ctx.new_page()
+        # Drive the window Chrome already opened (fall back to a new tab).
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
 
         ensure_logged_in(page)
 
