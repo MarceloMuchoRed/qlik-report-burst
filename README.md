@@ -72,8 +72,10 @@ Browser/login settings (usually leave as-is):
 - **CHROME_PROFILE** — the profile folder holding your Qlik login. Defaults to
   `Profile 1`. To confirm yours: open `chrome://version` and read **Profile
   Path** — the last folder in that path is the value (e.g. `Default`, `Profile 1`).
-- **CLOSE_CHROME** — `False` (default) pauses and asks you to close Chrome
-  yourself; `True` force-closes Chrome for you (use for scheduled/unattended runs).
+- **CLOSE_CHROME** — `True` (default) force-closes Chrome for you before running,
+  including the background processes Chrome leaves after you close its windows.
+  Set `False` only if you never want the script closing your browser (it will
+  then pause and ask you to close Chrome yourself).
 
 The script then requests, per employee:
 `http://10.0.2.5/single/?appid=<APP_ID>&obj=<OBJECT_ID>&select=<FILTER_FIELD>,<Employee>&opt=nointeraction`
@@ -90,12 +92,13 @@ Run it:
 python qlik_report_burst.py
 ```
 
-First run: **close Chrome first** (the script will remind you if it's open),
-then run it. Your Chrome opens on the Qlik page → if a login form appears,
-Chrome autofills it and you just press **Enter** in the browser → return to the
-terminal and press **Enter** there. It then screenshots each employee and opens
-draft emails for you to inspect. Check the screenshots in `screenshots\` and the
-drafts in Outlook. (If your Qlik session is still valid, no login shows at all.)
+First run: just run it — with `CLOSE_CHROME = True` (default) the script closes
+Chrome for you first (save any work in open tabs). Your Chrome then opens on the
+Qlik page → if a login form appears, Chrome autofills it and you just press
+**Enter** in the browser → return to the terminal and press **Enter** there. It
+then screenshots each employee and opens draft emails for you to inspect. Check
+the screenshots in `screenshots\` and the drafts in Outlook. (If your Qlik
+session is still valid, no login shows at all.)
 
 ## 5. Go live
 
@@ -107,11 +110,10 @@ When the drafts look right:
 ## 6. (Later) run it weekly, unattended
 
 Use **Windows Task Scheduler** → new task → run `python.exe` with argument
-`qlik_report_burst.py`, weekly. For a hands-off run also set:
-- `CLOSE_CHROME = True` so the script can grab the profile even if Chrome is open
-  (you'll lose any open Chrome tabs when it runs).
-- `HEADLESS = True` for a silent run (only do this once your Qlik session is
-  established — a headless run can't show a login form for you to complete).
+`qlik_report_burst.py`, weekly. `CLOSE_CHROME = True` (the default) already lets
+it grab the profile even if Chrome is open. For a fully silent run also set
+`HEADLESS = True` — but only once your Qlik session is established, since a
+headless run can't show a login form for you to complete.
 
 Note: an unattended run needs a still-valid Qlik session in Profile 1. If the
 session has expired it can't log in on its own, so keep an eye on the first
@@ -124,8 +126,10 @@ automated run and re-login when prompted.
 - If the chart screenshots before it finishes drawing, increase
   `RENDER_SETTLE_SECONDS`, or set `READY_SELECTOR` to a CSS selector that only
   appears once your specific chart is fully rendered.
-- Chrome must be **closed** while the script runs — it locks the profile. Set
-  `CLOSE_CHROME = True` to have the script close it for you.
+- Chrome must be **closed** while the script runs — it locks the profile. With
+  `CLOSE_CHROME = True` (default) the script closes it (and its leftover
+  background processes) for you; closing all windows by hand isn't enough because
+  Chrome keeps background processes running.
 - Your Qlik login lives in your normal Chrome **Profile 1**, so staying logged
   in there (don't sign out of Qlik in Chrome) is what keeps the script working.
 - This path does **not** depend on any extra Qlik reporting product. On on-prem,
