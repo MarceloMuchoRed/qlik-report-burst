@@ -1,9 +1,6 @@
 # --- Run output ---------------------------------------------------------
 screenshots/
 
-# --- Qlik login session (NEVER commit — holds your authenticated profile) --
-.browser-profile/
-
 # --- Recipient data --------------------------------------------------------
 # recipients.xlsx is committed with DUMMY test data so the repo runs on clone.
 # Replace it with the real list before going live (note: it IS tracked, so a

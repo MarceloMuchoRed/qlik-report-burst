@@ -9,9 +9,11 @@ Why this design:
   * The Qlik filter is applied through the Single Integration API URL
     (...&select=Field,Value) instead of clicking around the filter pane, so it
     doesn't break when the UI changes.
-  * Login is NOT scripted. You log in ONCE in the browser this script opens,
-    and the session is remembered in a local profile folder. The script never
-    needs (or stores) your Qlik password.
+  * Login is NOT scripted and no password is needed. The script drives your
+    INSTALLED Chrome using your real Chrome profile, so your saved Qlik login
+    is already there — Chrome autofills it and you just press ENTER once on the
+    first run. Chrome must be CLOSED while the script runs (it locks the
+    profile). The script never needs (or stores) your Qlik password.
   * Email goes through your desktop Outlook via COM automation, so there are no
     SMTP servers, app passwords, or OAuth apps to set up.
 
@@ -25,6 +27,7 @@ Then edit the CONFIG block below and run:
 
 import csv
 import os
+import subprocess
 import sys
 import time
 from urllib.parse import quote
@@ -100,9 +103,31 @@ MAX_EMPLOYEES = 2
 # --- Rendering / browser ----------------------------------------------------
 # Where the screenshots are written (next to this script by default).
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "screenshots")
-# Persistent browser profile (holds your Qlik login between runs). Don't delete
-# this folder or you'll have to log in again.
-PROFILE_DIR = os.path.join(SCRIPT_DIR, ".browser-profile")
+
+# This script drives your INSTALLED Chrome with your real Chrome profile, so
+# your saved Qlik login (and any live session) is already present — you never
+# type or need to know the password. On the first run the Qlik login page
+# loads, Chrome autofills your saved username/password, and you press ENTER
+# once; the session then persists for future runs.
+BROWSER_CHANNEL = "chrome"  # use installed Chrome, not Playwright's own Chromium
+# Your Chrome "User Data" root (auto-detected from %LOCALAPPDATA%). Override
+# only if Chrome is installed somewhere non-standard.
+CHROME_USER_DATA_DIR = os.path.join(
+    os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data"
+)
+# The profile folder INSIDE User Data that holds your Qlik login. On this
+# machine it's "Profile 1" (not "Default"). To confirm: open chrome://version
+# and read "Profile Path" — the last path segment is this value.
+CHROME_PROFILE = "Profile 1"
+# Chrome locks a profile while it's open, so Chrome must be CLOSED during a run.
+#   False -> the script pauses and asks you to close Chrome yourself (friendlier
+#            for manual runs; you keep your tabs).
+#   True  -> the script force-closes Chrome for you (needed for unattended /
+#            scheduled runs; you lose any open tabs).
+CLOSE_CHROME = False
+# headless=False lets you see the one-time login and lets Chrome autofill work.
+# Once your session persists, you can set this True for silent scheduled runs.
+HEADLESS = False
 # Seconds to wait after the chart appears, for animations/data to settle.
 RENDER_SETTLE_SECONDS = 4
 # Optional: a CSS selector that only appears once the chart is fully drawn.
@@ -178,6 +203,39 @@ def looks_like_login(page):
     return any(m in url for m in login_markers)
 
 
+def chrome_is_running():
+    """True if any chrome.exe process is running (it locks the user profile)."""
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq chrome.exe", "/NH"],
+            capture_output=True, text=True,
+        ).stdout.lower()
+        return "chrome.exe" in out
+    except Exception:
+        return False
+
+
+def ensure_chrome_closed():
+    """Chrome locks its profile while open, so make sure it's closed before we
+    launch Playwright against CHROME_PROFILE."""
+    if not chrome_is_running():
+        return
+    if CLOSE_CHROME:
+        print("Chrome is open; closing it so its profile can be used...")
+        subprocess.run(["taskkill", "/IM", "chrome.exe", "/F"],
+                       capture_output=True, text=True)
+        time.sleep(2)
+        return
+    print("\n" + "=" * 70)
+    print(" Chrome is currently OPEN. It locks the profile this script needs.")
+    print(" Please CLOSE all Chrome windows now (check the system tray too),")
+    input(" then come back here and press ENTER to continue... ")
+    print("=" * 70 + "\n")
+    if chrome_is_running():
+        print(" ! Chrome still looks like it's running. If the next step fails,"
+              " close Chrome fully and re-run (or set CLOSE_CHROME = True).")
+
+
 def ensure_logged_in(page):
     """Navigate to the tenant and, if needed, pause for a one-time manual login."""
     page.goto(TENANT_URL, wait_until="domcontentloaded")
@@ -243,7 +301,14 @@ def send_email(name, to_address, image_path):
 
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(PROFILE_DIR, exist_ok=True)
+
+    profile_path = os.path.join(CHROME_USER_DATA_DIR, CHROME_PROFILE)
+    if not os.path.isdir(profile_path):
+        sys.exit(
+            f"Chrome profile not found: {profile_path}\n"
+            f"Fix CHROME_USER_DATA_DIR / CHROME_PROFILE in CONFIG. "
+            f"(Open chrome://version and read 'Profile Path'.)"
+        )
 
     people = load_recipients(RECIPIENTS_FILE)
     if MAX_EMPLOYEES is not None:
@@ -253,14 +318,22 @@ def main():
           f"REVIEW_MODE={REVIEW_MODE}  "
           f"redirect={'ON -> ' + TEST_REDIRECT_EMAIL if TEST_REDIRECT_EMAIL else 'off'}")
 
+    ensure_chrome_closed()
+
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        # Persistent context = a real browser profile on disk that keeps the
-        # Qlik login between runs. headless=False so you can log in the 1st time.
+        # Drive your INSTALLED Chrome (channel="chrome") using your real profile
+        # so the saved Qlik login / live session is already present. Passing the
+        # User Data root plus --profile-directory selects CHROME_PROFILE.
         ctx = p.chromium.launch_persistent_context(
-            PROFILE_DIR, headless=False, accept_downloads=False
+            CHROME_USER_DATA_DIR,
+            channel=BROWSER_CHANNEL,
+            headless=HEADLESS,
+            accept_downloads=False,
+            args=[f"--profile-directory={CHROME_PROFILE}"],
         )
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        # Use a fresh tab (don't grab a session-restored one from the profile).
+        page = ctx.new_page()
 
         ensure_logged_in(page)
 

@@ -8,7 +8,7 @@ a hub reached at something like `http://10.0.2.5/hub/`. (It also works against
 Qlik Sense Cloud; just point `TENANT_URL` at your `*.qlikcloud.com` tenant.)
 
 - **Filter** is applied via the Qlik Single Integration API URL (`&select=Field,Value`) — no fragile clicking in the filter pane.
-- **Login** is never scripted. You log in **once** in the browser the script opens; the session is remembered in a local profile folder. No password is stored.
+- **Login** is never scripted and **no password is needed**. The script drives your **installed Chrome using your real Chrome profile**, so your saved Qlik login is already there — Chrome autofills it and you just press **Enter** once on the first run. Chrome must be **closed** while the script runs (it locks the profile). No password is stored.
 - **Email** goes through your already-signed-in **desktop Outlook** (COM automation) — no SMTP, app passwords, or OAuth.
 
 No admin rights required.
@@ -21,10 +21,11 @@ From the folder containing your portable `python.exe`:
 
 ```powershell
 python -m pip install playwright pywin32 openpyxl
-python -m playwright install chromium
 ```
 
-`playwright install` downloads Chromium into your user cache (`%USERPROFILE%\AppData\Local\ms-playwright`) — **no admin needed**.
+You do **not** need `python -m playwright install chromium` — the script uses
+your already-installed Chrome (`BROWSER_CHANNEL = "chrome"`), not Playwright's
+bundled Chromium. (Run it only if you switch `BROWSER_CHANNEL` to `"chromium"`.)
 
 If `import win32com` later errors, run once:
 ```powershell
@@ -64,6 +65,16 @@ Open the script's `CONFIG` block and set:
 - **FILTER_FIELD** — the field you change today, spelled exactly as Qlik shows
   it (case-sensitive), e.g. `Employee Name`.
 
+Browser/login settings (usually leave as-is):
+
+- **CHROME_USER_DATA_DIR** — auto-detected from `%LOCALAPPDATA%`; only change if
+  Chrome is installed somewhere unusual.
+- **CHROME_PROFILE** — the profile folder holding your Qlik login. Defaults to
+  `Profile 1`. To confirm yours: open `chrome://version` and read **Profile
+  Path** — the last folder in that path is the value (e.g. `Default`, `Profile 1`).
+- **CLOSE_CHROME** — `False` (default) pauses and asks you to close Chrome
+  yourself; `True` force-closes Chrome for you (use for scheduled/unattended runs).
+
 The script then requests, per employee:
 `http://10.0.2.5/single/?appid=<APP_ID>&obj=<OBJECT_ID>&select=<FILTER_FIELD>,<Employee>&opt=nointeraction`
 
@@ -79,9 +90,12 @@ Run it:
 python qlik_report_burst.py
 ```
 
-First run: a browser opens → **log into Qlik once** → return to the terminal and
-press **Enter**. It then screenshots each employee and opens draft emails for you
-to inspect. Check the screenshots in `screenshots\` and the drafts in Outlook.
+First run: **close Chrome first** (the script will remind you if it's open),
+then run it. Your Chrome opens on the Qlik page → if a login form appears,
+Chrome autofills it and you just press **Enter** in the browser → return to the
+terminal and press **Enter** there. It then screenshots each employee and opens
+draft emails for you to inspect. Check the screenshots in `screenshots\` and the
+drafts in Outlook. (If your Qlik session is still valid, no login shows at all.)
 
 ## 5. Go live
 
@@ -93,10 +107,15 @@ When the drafts look right:
 ## 6. (Later) run it weekly, unattended
 
 Use **Windows Task Scheduler** → new task → run `python.exe` with argument
-`qlik_report_burst.py`, weekly. Note: an unattended run needs a still-valid Qlik
-session in the profile folder; if the session has expired it will pause for a
-manual login, so for a hands-off weekly job keep an eye on the first automated
-run and re-login when prompted.
+`qlik_report_burst.py`, weekly. For a hands-off run also set:
+- `CLOSE_CHROME = True` so the script can grab the profile even if Chrome is open
+  (you'll lose any open Chrome tabs when it runs).
+- `HEADLESS = True` for a silent run (only do this once your Qlik session is
+  established — a headless run can't show a login form for you to complete).
+
+Note: an unattended run needs a still-valid Qlik session in Profile 1. If the
+session has expired it can't log in on its own, so keep an eye on the first
+automated run and re-login when prompted.
 
 ---
 
@@ -105,7 +124,10 @@ run and re-login when prompted.
 - If the chart screenshots before it finishes drawing, increase
   `RENDER_SETTLE_SECONDS`, or set `READY_SELECTOR` to a CSS selector that only
   appears once your specific chart is fully rendered.
-- Don't delete `.browser-profile\` — that's what keeps you logged in.
+- Chrome must be **closed** while the script runs — it locks the profile. Set
+  `CLOSE_CHROME = True` to have the script close it for you.
+- Your Qlik login lives in your normal Chrome **Profile 1**, so staying logged
+  in there (don't sign out of Qlik in Chrome) is what keeps the script working.
 - This path does **not** depend on any extra Qlik reporting product. On on-prem,
   the native server-side equivalent of a "burst report" is **Qlik NPrinting** (a
   separately licensed/installed add-on that can filter per recipient and email
