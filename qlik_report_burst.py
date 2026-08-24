@@ -51,7 +51,7 @@ TENANT_URL = "http://10.0.2.5"
 # The app (document) GUID. Open the app from the hub and read the URL:
 #   http://10.0.2.5/sense/app/76daa5f7-c3b3-40a7-a8a1-8c1453b2acf6/sheet/<SHEET_ID>/state/analysis
 # Paste the part between /app/ and /sheet/ here.
-APP_ID = "PASTE-APP-GUID-HERE"
+APP_ID = "48ab9fa2-5dc9-48f1-8b0e-25041e6313bd"
 
 # What to capture. Use EITHER a single object OR a whole sheet:
 #   OBJECT_ID -> cleanest: a single chart/table. On-prem, get it from the
@@ -62,12 +62,12 @@ APP_ID = "PASTE-APP-GUID-HERE"
 #   SHEET_ID  -> screenshots the whole sheet page instead. Leave OBJECT_ID = ""
 #                and set SHEET_ID (the GUID after /sheet/ in the app URL) to
 #                capture the full dashboard sheet.
-OBJECT_ID = "PASTE-OBJECT-ID-HERE"
-SHEET_ID = ""  # optional alternative to OBJECT_ID
+OBJECT_ID = ""  # empty -> capture the whole sheet (SHEET_ID below) instead of one chart
+SHEET_ID = "1266bc38-8212-4401-aa26-b3652bb6483d"  # the sheet to screenshot
 
 # The field you currently change in the filter, EXACTLY as Qlik names it
 # (case-sensitive), e.g. "Employee Name" or "EmployeeID".
-FILTER_FIELD = "Employee Name"
+FILTER_FIELD = "SALESPERSON_ORDER"
 
 # --- Your recipient spreadsheet ---------------------------------------------
 # Path to your employee -> email list. .xlsx (needs openpyxl) or .csv both work.
@@ -93,7 +93,7 @@ EMAIL_HTML_BODY = """
 REVIEW_MODE = True
 # If set to an address, ALL emails go there instead of the real recipients.
 # Great for a first end-to-end test to yourself. Set to "" to use real emails.
-TEST_REDIRECT_EMAIL = "marcelo@pennrosefarms.com"
+TEST_REDIRECT_EMAIL = "gerson@pennrosefarms.com"
 # Process at most this many rows (None = all). Keep it small while testing.
 MAX_EMPLOYEES = 2
 
