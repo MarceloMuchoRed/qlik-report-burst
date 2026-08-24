@@ -115,10 +115,11 @@ BROWSER_CHANNEL = "chrome"  # use installed Chrome, not Playwright's own Chromiu
 CHROME_USER_DATA_DIR = os.path.join(
     os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data"
 )
-# The profile folder INSIDE User Data that holds your Qlik login. On this
-# machine it's "Profile 1" (not "Default"). To confirm: open chrome://version
-# and read "Profile Path" — the last path segment is this value.
-CHROME_PROFILE = "Profile 1"
+# The profile folder INSIDE User Data that holds your Qlik login. This varies by
+# machine/user (commonly "Default", sometimes "Profile 1"). To confirm yours:
+# open chrome://version and read "Profile Path" — the LAST path segment is this
+# value (e.g. ...\User Data\Default  ->  "Default").
+CHROME_PROFILE = "Default"
 # Chrome locks a profile while it's open, so Chrome must be CLOSED during a run.
 #   False -> the script pauses and asks you to close Chrome yourself (friendlier
 #            for manual runs; you keep your tabs).
@@ -304,9 +305,20 @@ def main():
 
     profile_path = os.path.join(CHROME_USER_DATA_DIR, CHROME_PROFILE)
     if not os.path.isdir(profile_path):
+        # List the profile folders that DO exist so the fix is obvious.
+        try:
+            found = [
+                d for d in os.listdir(CHROME_USER_DATA_DIR)
+                if os.path.isdir(os.path.join(CHROME_USER_DATA_DIR, d))
+                and (d == "Default" or d.startswith("Profile "))
+            ]
+        except OSError:
+            found = []
+        avail = ", ".join(f'"{d}"' for d in found) if found else "(none found)"
         sys.exit(
             f"Chrome profile not found: {profile_path}\n"
-            f"Fix CHROME_USER_DATA_DIR / CHROME_PROFILE in CONFIG. "
+            f"Profiles available in this User Data folder: {avail}\n"
+            f"Set CHROME_PROFILE in CONFIG to one of those. "
             f"(Open chrome://version and read 'Profile Path'.)"
         )
 
