@@ -4,8 +4,10 @@ screenshots/
 # --- Qlik login session (NEVER commit — holds your authenticated profile) --
 .browser-profile/
 
-# --- Recipient data (employee names + emails; keep out of the repo) --------
-recipients.xlsx
+# --- Recipient data --------------------------------------------------------
+# recipients.xlsx is committed with DUMMY test data so the repo runs on clone.
+# Replace it with the real list before going live (note: it IS tracked, so a
+# real list committed here lands in the repo). Other formats stay ignored:
 recipients.xlsm
 recipients.csv
 
