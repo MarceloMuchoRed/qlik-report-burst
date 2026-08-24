@@ -121,11 +121,14 @@ CHROME_USER_DATA_DIR = os.path.join(
 # value (e.g. ...\User Data\Default  ->  "Default").
 CHROME_PROFILE = "Default"
 # Chrome locks a profile while it's open, so Chrome must be CLOSED during a run.
-#   False -> the script pauses and asks you to close Chrome yourself (friendlier
-#            for manual runs; you keep your tabs).
-#   True  -> the script force-closes Chrome for you (needed for unattended /
-#            scheduled runs; you lose any open tabs).
-CLOSE_CHROME = False
+# NOTE: Chrome leaves BACKGROUND processes running even after you close every
+# window (the "keep running in background" setting + extensions), and they still
+# hold the lock — so True is the reliable default.
+#   True  -> the script force-closes Chrome (incl. those background processes)
+#            for you. Any open Chrome windows/tabs are closed. Recommended.
+#   False -> the script instead pauses and asks you to close Chrome yourself;
+#            useful if you never want the script killing your browser.
+CLOSE_CHROME = True
 # headless=False lets you see the one-time login and lets Chrome autofill work.
 # Once your session persists, you can set this True for silent scheduled runs.
 HEADLESS = False
