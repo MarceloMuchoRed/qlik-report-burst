@@ -209,14 +209,15 @@ def looks_like_login(page):
 
 
 def chrome_is_running():
-    """True if any chrome.exe process is running (it locks the user profile)."""
+    """True if any chrome.exe process is running (it locks the user profile).
+    On any error/timeout, assume not running so we never hang or loop forever."""
     try:
         out = subprocess.run(
             ["tasklist", "/FI", "IMAGENAME eq chrome.exe", "/NH"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=15,
         ).stdout.lower()
         return "chrome.exe" in out
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
@@ -227,8 +228,12 @@ def ensure_chrome_closed():
         return
     if CLOSE_CHROME:
         print("Closing Chrome (incl. background processes) to free its profile...")
-        subprocess.run(["taskkill", "/IM", "chrome.exe", "/T", "/F"],
-                       capture_output=True, text=True)
+        try:
+            subprocess.run(["taskkill", "/IM", "chrome.exe", "/F"],
+                           capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            print(" ! taskkill didn't finish in time (a protected/antivirus "
+                  "process may be blocking it); continuing anyway.")
         # /F is asynchronous, so wait until the processes are actually gone.
         for _ in range(20):
             if not chrome_is_running():
