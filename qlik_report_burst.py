@@ -132,12 +132,13 @@ CHROME_PROFILE = "Default"
 USE_PROFILE_COPY = True
 # Where the private profile copy lives (recreated each run; gitignored).
 AUTOMATION_USER_DATA_DIR = os.path.join(SCRIPT_DIR, ".chrome-automation")
-# Some antivirus/EDR products TERMINATE any process that reads Chrome's saved-
-# password file ("Login Data") because that's what password-stealing malware
-# does. If the run dies right after "copying saved login ...", set this False:
-# the script then relies on your live session COOKIE instead (no autofill on the
-# login page — but if the cookie carries over, you won't see a login page).
-COPY_LOGIN_DATA = True
+# Some antivirus/EDR products TERMINATE any process that copies Chrome's saved-
+# password file ("Login Data") — that's classic password-stealer behaviour.
+# Defaults to False so the script never touches the password store; it rides on
+# your live session COOKIE instead (if the cookie carries over, you won't see a
+# login page at all). Set True only if you end up on a login page and need
+# Chrome to autofill it — but that may trip your antivirus.
+COPY_LOGIN_DATA = False
 # (Only used when USE_PROFILE_COPY = False.) Chrome locks a profile while it's
 # open, so the real profile must be CLOSED during a run. NOTE: Chrome leaves
 # BACKGROUND processes running even after you close every window, and they still
@@ -462,6 +463,7 @@ def main():
         prepare_profile_for_automation()
         user_data_dir, profile = CHROME_USER_DATA_DIR, CHROME_PROFILE
 
+    print("Profile ready; starting the browser engine...", flush=True)
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         # Drive your INSTALLED Chrome (channel="chrome"). Whether against the
