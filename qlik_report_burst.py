@@ -122,14 +122,16 @@ CHROME_USER_DATA_DIR = os.path.join(
 # value (e.g. ...\User Data\Default  ->  "Default").
 CHROME_PROFILE = "Default"
 # HOW the profile is used:
-#   True  -> RECOMMENDED. Copy the essential bits of your profile (cookies +
-#            saved login) into a private folder and drive Chrome from that COPY.
-#            Your real profile is never locked, so your normal Chrome can stay
-#            OPEN and nothing needs to be killed — best for locked-down VMs where
-#            Chrome processes can't be closed. (CLOSE_CHROME is then ignored.)
-#   False -> Use your real profile in place; requires Chrome fully CLOSED first
-#            (see CLOSE_CHROME), which is brittle if Chrome won't fully quit.
-USE_PROFILE_COPY = True
+#   False -> RECOMMENDED HERE. Drive your real profile IN PLACE. Requires Chrome
+#            fully CLOSED first (see CLOSE_CHROME). On this VM this is the path
+#            that works: it never copies Login Data (so the antivirus never
+#            trips), and with Chrome closed the live Qlik session cookie is
+#            readable — so you usually land already-logged-in with no form at all.
+#   True  -> Copy cookies + saved login into a private folder and drive Chrome
+#            from that COPY so your real Chrome can stay open. Abandoned on this
+#            VM: the AV kills the process when it copies the password store, and a
+#            live Chrome locks the Cookies file so the session cookie won't copy.
+USE_PROFILE_COPY = False
 # Where the private profile copy lives (recreated each run; gitignored).
 AUTOMATION_USER_DATA_DIR = os.path.join(SCRIPT_DIR, ".chrome-automation")
 # Some antivirus/EDR products TERMINATE any process that copies Chrome's saved-
@@ -149,7 +151,12 @@ COPY_LOGIN_DATA = False
 #      (the browser reuses your current Windows session). Try this first.
 #   2) Explicit credentials: for Basic auth (or a Qlik-specific account), put the
 #      username/password here and they're sent directly. Leave blank to skip.
-WINDOWS_INTEGRATED_AUTH = True
+# NOTE: curl proved THIS server uses Qlik FORMS authentication (a web login page),
+# not HTTP auth — /hub/ 302s to /internal_forms_authentication/, and NTLM SSO
+# (curl --ntlm -u :) gets the same redirect. So all three options below do
+# nothing on this server; they're left OFF on purpose. (Kept for portability if
+# the repo is ever pointed at an HTTP-auth Qlik proxy.)
+WINDOWS_INTEGRATED_AUTH = False
 HTTP_AUTH_USERNAME = ""
 HTTP_AUTH_PASSWORD = ""
 
@@ -159,7 +166,10 @@ HTTP_AUTH_PASSWORD = ""
 # hold the lock — so True is the more reliable of the two.
 #   True  -> the script force-closes Chrome (incl. those background processes).
 #   False -> the script pauses and asks you to close Chrome yourself.
-CLOSE_CHROME = True
+# On THIS VM taskkill can't terminate Chrome's protected/background processes, so
+# True didn't reliably free the profile. Set False: you exit Chrome yourself
+# (fully — see the tray) once per run, which is the reliable path here.
+CLOSE_CHROME = False
 # headless=False lets you see the one-time login and lets Chrome autofill work.
 # Once your session persists, you can set this True for silent scheduled runs.
 HEADLESS = False
@@ -274,9 +284,16 @@ def ensure_chrome_closed():
                   " or protected). Continuing; if launch fails, restart the VM.")
         return
     print("\n" + "=" * 70)
-    print(" Chrome is currently OPEN. It locks the profile this script needs.")
-    print(" Please CLOSE all Chrome windows now (check the system tray too),")
-    input(" then come back here and press ENTER to continue... ")
+    print(" Chrome is currently OPEN. It locks the profile this script needs, and")
+    print(" this VM's antivirus won't let the script force-close it, so please")
+    print(" quit Chrome YOURSELF now:")
+    print("   1. Close every Chrome window.")
+    print("   2. Chrome often keeps running in the background: right-click the")
+    print("      Chrome icon in the system tray (bottom-right, may be under the")
+    print("      ^ arrow) and choose Exit. If there's no tray icon, you're good.")
+    print("   (Optional, so this sticks: chrome://settings -> System -> turn OFF")
+    print("    'Continue running background apps when Google Chrome is closed'.)")
+    input(" When Chrome is fully closed, press ENTER to continue... ")
     print("=" * 70 + "\n")
     if chrome_is_running():
         print(" ! Chrome still looks like it's running. If the next step fails,"
@@ -374,29 +391,28 @@ def build_profile_copy():
 
 
 def ensure_logged_in(page):
-    """Navigate to the tenant and, if needed, pause for a one-time manual login."""
+    """Navigate to the tenant and, if we land on Qlik's forms-login page, pause
+    for a one-time manual login (Chrome autofills the saved credentials; you just
+    submit). A still-live session from the real profile usually skips this."""
     print(f"Opening Qlik: {TENANT_URL}")
     try:
         page.goto(TENANT_URL, wait_until="domcontentloaded", timeout=60000)
+        time.sleep(3)
+        print(f"   landed at: {page.url}")
     except Exception as e:
-        if "ERR_INVALID_AUTH_CREDENTIALS" in str(e):
-            sys.exit(
-                "\nQlik answered with an HTTP authentication challenge (a browser"
-                " credential popup) that this browser couldn't satisfy.\n"
-                "So Qlik here uses HTTP auth, not a web login form. Fix options:\n"
-                "  - If it's Windows/NTLM: WINDOWS_INTEGRATED_AUTH = True is set;\n"
-                "    if it still fails, the server wants a non-Windows account.\n"
-                "  - If it's Basic auth: set HTTP_AUTH_USERNAME / HTTP_AUTH_PASSWORD.\n"
-                "To see which scheme it is, run:  curl.exe -sI http://10.0.2.5/\n"
-                "and look at the 'WWW-Authenticate:' line.\n"
-            )
-        raise
-    time.sleep(3)
-    print(f"   landed at: {page.url}")
-    if looks_like_login(page) or "hub" not in page.url.lower():
+        # Not fatal: fall through to the manual-login pause so you can sign in by
+        # hand. (An earlier build sys.exited here on ERR_INVALID_AUTH_CREDENTIALS
+        # believing this was HTTP auth; curl disproved that — it's forms auth.)
+        print(f"   ! couldn't auto-load the page ({e}); log in manually below.")
+
+    url = (page.url or "").lower()
+    on_form = "internal_forms_authentication" in url
+    if on_form or looks_like_login(page) or "hub" not in url:
         print("\n" + "=" * 70)
-        print(" A browser window is open. Please LOG IN to Qlik there now.")
-        print(" (You only have to do this once; the session is remembered.)")
+        print(" Qlik is showing its LOGIN page in the browser window.")
+        print(" Click the username field — Chrome should autofill your saved")
+        print(" login — then submit. (No password to type; you never need to")
+        print(" know it. The session is remembered for a while after.)")
         print(" When you can see your Qlik hub/app, come back here and")
         input(" press ENTER to continue... ")
         print("=" * 70 + "\n")
