@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-08-25
+- Pinned down the auth scheme, ending the HTTP/NTLM detour. `page.goto` had been
+  failing with `ERR_INVALID_AUTH_CREDENTIALS`, which we'd guessed was HTTP Basic/
+  NTLM (added `WINDOWS_INTEGRATED_AUTH` + `--auth-server-allowlist` and
+  `HTTP_AUTH_USERNAME/PASSWORD` on a hunch). Curl on the VM disproved it:
+  `curl -sI http://10.0.2.5/hub/` returns `302 -> /internal_forms_authentication/
+  ?targetId=...`, i.e. **Qlik Sense internal FORMS authentication (a web login
+  page)**, not an HTTP 401 challenge. `curl --ntlm -u :` (current Windows user via
+  SSPI) got the *same* form redirect, proving **NTLM/Windows SSO does nothing
+  here** — the Qlik virtual proxy isn't configured for it. So the integrated-auth
+  and HTTP-credentials machinery is dead weight for this server. chrome://version
+  on the VM confirms the active profile is `Default` (matches CONFIG). Net: auth
+  must come from either (a) scripting the Qlik forms login with real credentials,
+  or (b) reusing a live session cookie — decision pending on whether the Qlik
+  username/password can be obtained.
+
 ## 2026-08-24
 - Fixed the login blocker: the Qlik password is saved in Chrome's password
   manager but unknown to the user (VM they don't have the Windows password for),
