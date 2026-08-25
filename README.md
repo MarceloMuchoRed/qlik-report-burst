@@ -12,8 +12,8 @@ Qlik Sense Cloud; just point `TENANT_URL` at your `*.qlikcloud.com` tenant.)
 This is plain, deterministic browser automation. **There is no AI / ML / LLM
 anywhere in it.** It does exactly three things, in order, and nothing else:
 
-1. **Log in** to Qlik once, using a Qlik service account (a username and
-   password) — the same login page a person would use, filled in by script.
+1. **Log in** to Qlik once, using a service account (a username and password) —
+   the same credentials a person would enter, sent by the script.
 2. **Export** one chart per person: it requests a Qlik chart URL with that
    person's filter applied and saves the rendered chart as a PNG.
 3. **Email** that PNG to the person through the desktop Outlook app.
@@ -23,10 +23,13 @@ It's a login-export-email bot.
 
 - **Filter** is applied via the Qlik Single Integration API URL
   (`&select=Field,Value`) — no fragile clicking in the filter pane.
-- **Login** is a scripted Qlik forms login. The script fills the username and
-  password on Qlik's own login page (`/internal_forms_authentication/`) and
-  submits. Credentials come from environment variables or a local, gitignored
-  file — **never from the code**, so nothing secret is committed.
+- **Login**: the Qlik virtual proxy uses **Windows authentication**
+  (`/internal_windows_authentication/`) — an NTLM/Negotiate challenge, i.e. the
+  browser credential popup, not a web form. The script answers that challenge
+  with the service account via the browser's HTTP credentials. This matters:
+  without it the browser would silently sign in as the machine's own Windows
+  login, which typically has no Qlik access pass. Credentials come from
+  environment variables or a local, gitignored file — **never from the code**.
 - **Browser** runs in a fresh throwaway profile every time. It never touches
   your real Chrome profile, so your normal Chrome can stay open, and it runs
   headless for silent scheduled runs.
@@ -75,9 +78,10 @@ QLIK_USERNAME=the-service-account
 QLIK_PASSWORD=the-password
 ```
 
-If neither is set and `HEADLESS = False`, the script pauses so you can log in by
-hand in the browser window — handy for a live demo before the service-account
-password has been issued.
+Use the account your admin licensed for this (the one that works when you log in
+by hand), **not** the machine's own Windows login. If the account is
+domain-joined and a bare username is rejected, use `DOMAIN\user` or
+`user@domain`. Credentials are required — the script exits if none are set.
 
 ## 3. Make your recipients file
 
@@ -142,10 +146,9 @@ When the drafts look right:
 
 Use **Windows Task Scheduler** → new task → run `python.exe` with argument
 `qlik_report_burst.py`, weekly. For a fully silent run set `HEADLESS = True`.
-Because the login is scripted with the service account, a headless run logs
-itself in every time — there's no saved session to expire and no prompt to
-answer. (Make sure the credentials are available to the scheduled task's
-account, via env vars or `qlik_credentials.txt`.)
+The bot sends the service account on every run, so there's no saved session to
+expire and no prompt to answer. (Make sure the credentials are available to the
+scheduled task's account, via env vars or `qlik_credentials.txt`.)
 
 ---
 
@@ -154,10 +157,12 @@ account, via env vars or `qlik_credentials.txt`.)
 - If the chart screenshots before it finishes drawing, increase
   `RENDER_SETTLE_SECONDS`, or set `READY_SELECTOR` to a CSS selector that only
   appears once your specific chart is fully rendered.
-- If the login doesn't go through, the login page may use non-default field
-  names; adjust `LOGIN_USERNAME_SELECTOR` / `LOGIN_PASSWORD_SELECTOR` /
-  `LOGIN_SUBMIT_SELECTOR` in CONFIG. The defaults are Qlik's standard
-  `username` / `pwd` fields.
+- If you get **"You cannot access Qlik Sense because you have no access pass"**,
+  the bot authenticated as the wrong (unlicensed) Windows identity. Make sure
+  `QLIK_USERNAME`/`QLIK_PASSWORD` hold the licensed service account, and try a
+  `DOMAIN\user` / `user@domain` form if a bare username is rejected.
+- If the run stays on `/internal_windows_authentication/`, the credentials were
+  rejected — same fix as above.
 - This path does **not** depend on any extra Qlik reporting product. On on-prem,
   the native server-side equivalent of a "burst report" is **Qlik NPrinting** (a
   separately licensed/installed add-on that can filter per recipient and email

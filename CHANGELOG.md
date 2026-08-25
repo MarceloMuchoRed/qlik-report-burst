@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-08-25 (auth scheme correction — Windows auth, not forms)
+- **Confirmed the real auth scheme once IT issued the `gmrqlik` service account:
+  the Qlik virtual proxy uses WINDOWS authentication, not forms.** The login URL
+  is `/internal_windows_authentication/?targetId=...` (an NTLM/Negotiate browser
+  popup), and manual login = typing `gmrqlik` into that popup. This overturns the
+  earlier "forms auth" conclusion (the Aug-25 curl saw a forms redirect, but the
+  server was either reconfigured when IT set up `gmrqlik` or was never actually
+  forms for a browser). Root cause of the failures, in order:
+  - First run (fresh throwaway profile, no auth machinery): `net::ERR_INVALID_
+    AUTH_CREDENTIALS` on `/hub/` — the browser couldn't answer the NTLM challenge.
+  - After adding `--auth-server-allowlist`: it authenticated, but **as the VM's
+    own Windows account (`p-mdragustinovis`) via silent SSO**, landing on
+    `/hub/?qlikTicket=...` with no form. That account has no Qlik access pass →
+    the app showed "You cannot access Qlik Sense because you have no access pass."
+    The `gmrqlik` creds were never used (SSO auto-answered the popup first).
+- **Fix:** answer the Windows-auth challenge explicitly with the service account
+  via Playwright `http_credentials={username, password}` on the browser context,
+  and **remove `--auth-server-allowlist`** (it was forcing the wrong-identity
+  SSO). Removed the now-wrong forms-login machinery entirely (`submit_login`,
+  `on_login_page`, `manual_login_pause`, the `LOGIN_*_SELECTOR` config) and the
+  `urlparse`/`AUTH_SERVER_ALLOWLIST` bits. `ensure_logged_in` now just navigates
+  and reports; staying on `/internal_windows_authentication/` means the creds
+  were rejected. Credentials are now mandatory (script exits if unset). Also
+  fixed the stale `SHEET_ID` (was `1266bc38-...`, now `6527c8b7-...` from the live
+  app URL). Byte-compiles clean; **live-run confirmation pending** (this run had
+  not yet been verified end-to-end on the VM at commit time).
+
 ## 2026-08-25
 - Resolved the last open auth question: the username Chrome autofills on the Qlik
   login form is a **separate Qlik/service account**, not Marcelo's own AD/corporate

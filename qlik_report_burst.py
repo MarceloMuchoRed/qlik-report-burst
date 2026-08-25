@@ -6,9 +6,14 @@ image via the local Outlook desktop app.
 Design notes:
   * The per-employee filter is applied through the Qlik Single Integration API
     URL (&select=Field,Value) rather than by driving the filter pane.
-  * Login is a scripted Qlik forms login against /internal_forms_authentication/.
-    Credentials come from QLIK_USERNAME/QLIK_PASSWORD or a gitignored
-    qlik_credentials.txt, never from this file.
+  * The Qlik virtual proxy uses Windows authentication
+    (/internal_windows_authentication/) — an NTLM/Negotiate challenge (the
+    browser credential popup), not a web form. The bot answers that challenge
+    with a specific service account via Playwright's http_credentials, so it
+    authenticates as that licensed account instead of silently single-signing-on
+    as the VM's own (unlicensed) Windows login. Credentials come from
+    QLIK_USERNAME/QLIK_PASSWORD or a gitignored qlik_credentials.txt, never from
+    this file.
   * Email is sent through the desktop Outlook via COM (no SMTP/OAuth setup).
 
 See README.md for setup and configuration.
@@ -18,7 +23,7 @@ import csv
 import os
 import sys
 import time
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -72,22 +77,16 @@ HEADLESS = False              # True for silent scheduled runs
 RENDER_SETTLE_SECONDS = 4     # settle time after the chart appears
 READY_SELECTOR = ""           # CSS selector that appears once drawn; "" = generic
 
-# --- Qlik login -------------------------------------------------------------
-# Credentials: env vars QLIK_USERNAME/QLIK_PASSWORD, else a gitignored
-# qlik_credentials.txt (KEY=VALUE). If unset and headed, prompts for a manual
-# browser login.
+# --- Qlik login (Windows authentication) ------------------------------------
+# The Qlik virtual proxy challenges with Windows auth (NTLM/Negotiate). The bot
+# answers that challenge with the credentials below (a LICENSED service account,
+# e.g. gmrqlik). Do NOT rely on the VM's own Windows login: that signs in
+# silently as the VM account, which has no Qlik access pass. If the account is
+# domain-joined and plain "gmrqlik" is rejected, try DOMAIN\gmrqlik or
+# gmrqlik@domain.
+# Credentials are read from env vars QLIK_USERNAME/QLIK_PASSWORD, else a
+# gitignored qlik_credentials.txt (KEY=VALUE). They are never stored in this file.
 CREDENTIALS_FILE = os.path.join(SCRIPT_DIR, "qlik_credentials.txt")
-# Qlik Sense default login-form fields; override if your login page is customized.
-LOGIN_USERNAME_SELECTOR = 'input[name="username"], input#username, input[type="text"]'
-LOGIN_PASSWORD_SELECTOR = 'input[name="pwd"], input[name="password"], input[type="password"]'
-LOGIN_SUBMIT_SELECTOR = 'button[type="submit"], input[type="submit"], #loginbtn, .submit-button'
-
-# The Qlik host usually sits behind Windows Integrated Auth (NTLM/Negotiate).
-# The automated browser answers that challenge silently with the VM's current
-# Windows login, the same SSO your normal Chrome does before the Qlik form even
-# shows. Without it a fresh profile fails with net::ERR_INVALID_AUTH_CREDENTIALS.
-# Set to "" if your server doesn't use integrated auth.
-AUTH_SERVER_ALLOWLIST = urlparse(TENANT_URL).hostname or ""
 
 # ==========================================================================
 
@@ -169,81 +168,23 @@ def build_single_url(employee_name):
     return base + "?" + "&".join(params)
 
 
-def on_login_page(page):
-    """True if we're on Qlik's forms-login page rather than the app."""
-    if "internal_forms_authentication" in (page.url or "").lower():
-        return True
-    # Otherwise fall back to detecting a password field; times out on the hub.
-    try:
-        page.wait_for_selector('input[type="password"]', timeout=2500)
-        return True
-    except Exception:
-        return False
-
-
-def submit_login(page, username, password):
-    """Fill Qlik's forms-login page and submit."""
-    print("   login page detected; signing in with the Qlik service account...")
-    page.locator(LOGIN_USERNAME_SELECTOR).first.fill(username)
-    page.locator(LOGIN_PASSWORD_SELECTOR).first.fill(password)
-    try:
-        page.locator(LOGIN_SUBMIT_SELECTOR).first.click(timeout=3000)
-    except Exception:
-        page.locator(LOGIN_PASSWORD_SELECTOR).first.press("Enter")  # no submit button
-    try:
-        page.wait_for_load_state("networkidle", timeout=30000)
-    except Exception:
-        pass
-
-
-def manual_login_pause():
-    """Headed-only fallback: wait for a human to log in by hand, then continue."""
-    print("\n" + "=" * 70)
-    print(" Qlik is showing its LOGIN page in the browser window.")
-    print(" Log in there by hand, then come back to this terminal and")
-    input(" press ENTER once you can see your Qlik hub/app... ")
-    print("=" * 70 + "\n")
-
-
-def ensure_logged_in(page, username, password):
-    """Open the hub and, if Qlik shows its forms-login page, authenticate with
-    the configured credentials (or, headed and without them, pause for a manual
-    login)."""
+def ensure_logged_in(page):
+    """Open the hub. The Windows-auth challenge is answered at the HTTP layer by
+    the context's http_credentials, so this just navigates and reports where we
+    landed. Staying on the /internal_windows_authentication/ endpoint means the
+    service-account credentials were rejected."""
     target = TENANT_URL.rstrip("/") + "/hub/"
     print(f"Opening Qlik: {target}")
     try:
         page.goto(target, wait_until="domcontentloaded", timeout=60000)
         time.sleep(2)
-        print(f"   landed at: {page.url}")
     except Exception as e:
-        print(f"   ! couldn't load the page ({e}); will check for a login form.")
-
-    if not on_login_page(page):
-        print("   already logged in (no login form shown).")
-        return
-
-    if username and password:
-        try:
-            submit_login(page, username, password)
-        except Exception as e:
-            print(f"   ! scripted login failed ({e}).")
-        if on_login_page(page):
-            print("   ! still on the login page after submitting "
-                  "(check the credentials / field selectors).")
-            if not HEADLESS:
-                manual_login_pause()
-        else:
-            print(f"   logged in; now at: {page.url}")
-        return
-
-    if HEADLESS:
-        sys.exit(
-            "Qlik requires a login but no QLIK_USERNAME/QLIK_PASSWORD is set and "
-            "the run is HEADLESS (can't prompt). Set the credentials (env vars or "
-            "qlik_credentials.txt) or run with HEADLESS = False to log in by hand."
-        )
-    print("   no credentials configured; log in by hand in the browser window.")
-    manual_login_pause()
+        print(f"   ! couldn't load the hub ({e}).")
+    print(f"   landed at: {page.url}")
+    if "authentication" in (page.url or "").lower():
+        print("   ! still on the Windows-auth endpoint — the service-account "
+              "credentials look rejected. Check QLIK_USERNAME/QLIK_PASSWORD "
+              "(a domain account may need DOMAIN\\user or user@domain form).")
 
 
 def capture(page, employee_name, out_path):
@@ -296,18 +237,12 @@ def send_email(name, to_address, image_path):
 def launch_browser(p):
     """Launch the configured browser in a throwaway profile, falling back to
     Playwright's bundled Chromium if the installed Chrome channel isn't found."""
-    args = []
-    if AUTH_SERVER_ALLOWLIST:
-        args += [
-            f"--auth-server-allowlist={AUTH_SERVER_ALLOWLIST}",
-            f"--auth-negotiate-delegate-allowlist={AUTH_SERVER_ALLOWLIST}",
-        ]
     try:
-        return p.chromium.launch(channel=BROWSER_CHANNEL, headless=HEADLESS, args=args)
+        return p.chromium.launch(channel=BROWSER_CHANNEL, headless=HEADLESS)
     except Exception as e:
         print(f"   ! couldn't launch '{BROWSER_CHANNEL}' ({e}); "
               f"falling back to Playwright's bundled Chromium.")
-        return p.chromium.launch(headless=HEADLESS, args=args)
+        return p.chromium.launch(headless=HEADLESS)
 
 
 def main():
@@ -318,21 +253,30 @@ def main():
         people = people[:MAX_EMPLOYEES]
 
     username, password = read_credentials()
+    if not (username and password):
+        sys.exit(
+            "No Qlik credentials set. The server uses Windows authentication, so "
+            "the bot must send a service account. Set QLIK_USERNAME/QLIK_PASSWORD "
+            "(env vars) or fill qlik_credentials.txt."
+        )
 
     print(f"Processing {len(people)} employee(s). "
           f"REVIEW_MODE={REVIEW_MODE}  "
           f"redirect={'ON -> ' + TEST_REDIRECT_EMAIL if TEST_REDIRECT_EMAIL else 'off'}")
-    print(f"Qlik login: "
-          f"{'service account ' + username if username else 'NONE set (will prompt in the browser)'}")
+    print(f"Qlik login (Windows auth): {username}")
 
     print("Starting the browser engine...", flush=True)
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         browser = launch_browser(p)
-        context = browser.new_context()
+        # Answer the Qlik proxy's Windows-auth (NTLM/Negotiate) challenge with the
+        # service account, rather than the VM's ambient login.
+        context = browser.new_context(
+            http_credentials={"username": username, "password": password}
+        )
         page = context.new_page()
 
-        ensure_logged_in(page, username, password)
+        ensure_logged_in(page)
 
         for i, person in enumerate(people, 1):
             name = person["name"]
