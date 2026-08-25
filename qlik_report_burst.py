@@ -249,14 +249,30 @@ def looks_like_login(page):
 
 
 def chrome_is_running():
-    """True if any chrome.exe process is running (it locks the user profile).
-    On any error/timeout, assume not running so we never hang or loop forever."""
+    """True if THIS user has a chrome.exe running (it locks the user profile).
+    Chrome.exe in OTHER sessions/VMs on the same host is ignored — those don't
+    touch our profile and we can't (and shouldn't) close them; counting them
+    caused a false 'Chrome is open' prompt. On any error/timeout, assume not
+    running so we never hang or loop forever."""
     try:
+        import csv as _csv
+        user = os.environ.get("USERNAME", "").strip().lower()
         out = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq chrome.exe", "/NH"],
+            ["tasklist", "/V", "/FI", "IMAGENAME eq chrome.exe",
+             "/FO", "CSV", "/NH"],
             capture_output=True, text=True, timeout=15,
-        ).stdout.lower()
-        return "chrome.exe" in out
+        ).stdout
+        if "chrome.exe" not in out.lower():
+            return False
+        # CSV cols: Image,PID,Session,Session#,Mem,Status,User Name,CPU,Title.
+        # Other users' rows show "N/A" for User Name (access denied) -> excluded.
+        for row in _csv.reader(out.splitlines()):
+            if len(row) < 7 or not row[0].lower().startswith("chrome.exe"):
+                continue
+            owner = row[6].split("\\")[-1].strip().lower()
+            if user and owner == user:
+                return True
+        return False
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -269,8 +285,15 @@ def ensure_chrome_closed():
     if CLOSE_CHROME:
         print("Closing Chrome (incl. background processes) to free its profile...")
         try:
-            subprocess.run(["taskkill", "/IM", "chrome.exe", "/F"],
-                           capture_output=True, text=True, timeout=30)
+            # Scope the kill to THIS user so other sessions'/VMs' Chrome is
+            # untouched (and so it can't fail trying to kill processes we can't).
+            user = os.environ.get("USERNAME", "")
+            domain = os.environ.get("USERDOMAIN", "")
+            who = f"{domain}\\{user}" if domain else user
+            kill = ["taskkill", "/IM", "chrome.exe", "/F"]
+            if user:
+                kill += ["/FI", f"USERNAME eq {who}"]
+            subprocess.run(kill, capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
             print(" ! taskkill didn't finish in time (a protected/antivirus "
                   "process may be blocking it); continuing anyway.")
