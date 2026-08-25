@@ -1,8 +1,8 @@
 # --- Run output ---------------------------------------------------------
 screenshots/
 
-# --- Private Chrome profile copy (holds copied cookies/login — NEVER commit) --
-.chrome-automation/
+# --- Qlik credentials (service-account username/password — NEVER commit) -----
+qlik_credentials.txt
 
 # --- Recipient data --------------------------------------------------------
 # recipients.xlsx is committed with DUMMY test data so the repo runs on clone.

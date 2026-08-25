@@ -2,33 +2,51 @@
 qlik_report_burst.py
 ---------------------
 Weekly "burst" job: for each employee in a spreadsheet, open the Qlik Sense
-Cloud dashboard filtered to that employee, screenshot it, and email the image
+dashboard filtered to that employee, screenshot the chart, and email the image
 to that person via the local (already-signed-in) Outlook desktop app.
 
+What this is (and is NOT):
+  This is plain, deterministic browser automation. There is NO AI / ML / LLM
+  anywhere in it. Step by step it does exactly this and nothing else:
+    1. Open a headless browser and log into Qlik once, using a Qlik service
+       account (a username + password), the same way a person would type them
+       into the login page.
+    2. For each row in the recipient list, request one Qlik chart URL with that
+       person's filter applied, and save the rendered chart as a PNG.
+    3. Attach that PNG to an email and send it through the desktop Outlook app.
+  It reads no other data, makes no decisions, and changes nothing in Qlik. It is
+  a login-export-email bot.
+
 Why this design:
-  * The Qlik filter is applied through the Single Integration API URL
-    (...&select=Field,Value) instead of clicking around the filter pane, so it
-    doesn't break when the UI changes.
-  * Login is NOT scripted and no password is needed. The script drives your
-    INSTALLED Chrome using your real Chrome profile, so your saved Qlik login
-    is already there — Chrome autofills it and you just press ENTER once on the
-    first run. Chrome must be CLOSED while the script runs (it locks the
-    profile). The script never needs (or stores) your Qlik password.
+  * The per-employee filter is applied through the Qlik Single Integration API
+    URL (...&select=Field,Value) instead of clicking around the filter pane, so
+    it doesn't break when the UI changes.
+  * Login is a scripted Qlik forms login: the script fills the username/password
+    on Qlik's own login page (/internal_forms_authentication/) and submits. The
+    credentials come from environment variables (or a local, gitignored file),
+    never from the code, so nothing secret is ever committed.
   * Email goes through your desktop Outlook via COM automation, so there are no
     SMTP servers, app passwords, or OAuth apps to set up.
 
 No admin rights required. Install into your portable Python with:
     python -m pip install playwright pywin32 openpyxl
+The script drives your installed Chrome (BROWSER_CHANNEL = "chrome"); it only
+needs Playwright's bundled Chromium as a fallback, so this is optional:
     python -m playwright install chromium
+
+Provide the Qlik service-account credentials (do NOT put them in this file):
+    setx QLIK_USERNAME "the-service-account"
+    setx QLIK_PASSWORD "the-password"
+  ...or create a gitignored qlik_credentials.txt next to this script:
+    QLIK_USERNAME=the-service-account
+    QLIK_PASSWORD=the-password
 
 Then edit the CONFIG block below and run:
     python qlik_report_burst.py
 """
 
 import csv
-import json
 import os
-import subprocess
 import sys
 import time
 from urllib.parse import quote
@@ -105,79 +123,44 @@ MAX_EMPLOYEES = 2
 # Where the screenshots are written (next to this script by default).
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "screenshots")
 
-# This script drives your INSTALLED Chrome with your real Chrome profile, so
-# your saved Qlik login (and any live session) is already present — you never
-# type or need to know the password. On the first run the Qlik login page
-# loads, Chrome autofills your saved username/password, and you press ENTER
-# once; the session then persists for future runs.
-BROWSER_CHANNEL = "chrome"  # use installed Chrome, not Playwright's own Chromium
-# Your Chrome "User Data" root (auto-detected from %LOCALAPPDATA%). Override
-# only if Chrome is installed somewhere non-standard.
-CHROME_USER_DATA_DIR = os.path.join(
-    os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data"
-)
-# The profile folder INSIDE User Data that holds your Qlik login. This varies by
-# machine/user (commonly "Default", sometimes "Profile 1"). To confirm yours:
-# open chrome://version and read "Profile Path" — the LAST path segment is this
-# value (e.g. ...\User Data\Default  ->  "Default").
-CHROME_PROFILE = "Default"
-# HOW the profile is used:
-#   False -> RECOMMENDED HERE. Drive your real profile IN PLACE. Requires Chrome
-#            fully CLOSED first (see CLOSE_CHROME). On this VM this is the path
-#            that works: it never copies Login Data (so the antivirus never
-#            trips), and with Chrome closed the live Qlik session cookie is
-#            readable — so you usually land already-logged-in with no form at all.
-#   True  -> Copy cookies + saved login into a private folder and drive Chrome
-#            from that COPY so your real Chrome can stay open. Abandoned on this
-#            VM: the AV kills the process when it copies the password store, and a
-#            live Chrome locks the Cookies file so the session cookie won't copy.
-USE_PROFILE_COPY = False
-# Where the private profile copy lives (recreated each run; gitignored).
-AUTOMATION_USER_DATA_DIR = os.path.join(SCRIPT_DIR, ".chrome-automation")
-# Some antivirus/EDR products TERMINATE any process that copies Chrome's saved-
-# password file ("Login Data") — that's classic password-stealer behaviour.
-# Defaults to False so the script never touches the password store; it rides on
-# your live session COOKIE instead (if the cookie carries over, you won't see a
-# login page at all). Set True only if you end up on a login page and need
-# Chrome to autofill it — but that may trip your antivirus.
-COPY_LOGIN_DATA = False
-
-# --- HTTP authentication (only if Qlik shows a browser CREDENTIAL POPUP) -----
-# If opening Qlik pops a small username/password DIALOG (HTTP Basic/NTLM auth),
-# not a web page with login fields, the browser must send credentials on the
-# request itself — a copied cookie/profile won't do it. Two options:
-#   1) Windows integrated auth: if the server uses NTLM/Negotiate against your
-#      Windows login, WINDOWS_INTEGRATED_AUTH = True logs you in with NO password
-#      (the browser reuses your current Windows session). Try this first.
-#   2) Explicit credentials: for Basic auth (or a Qlik-specific account), put the
-#      username/password here and they're sent directly. Leave blank to skip.
-# NOTE: curl proved THIS server uses Qlik FORMS authentication (a web login page),
-# not HTTP auth — /hub/ 302s to /internal_forms_authentication/, and NTLM SSO
-# (curl --ntlm -u :) gets the same redirect. So all three options below do
-# nothing on this server; they're left OFF on purpose. (Kept for portability if
-# the repo is ever pointed at an HTTP-auth Qlik proxy.)
-WINDOWS_INTEGRATED_AUTH = False
-HTTP_AUTH_USERNAME = ""
-HTTP_AUTH_PASSWORD = ""
-
-# (Only used when USE_PROFILE_COPY = False.) Chrome locks a profile while it's
-# open, so the real profile must be CLOSED during a run. NOTE: Chrome leaves
-# BACKGROUND processes running even after you close every window, and they still
-# hold the lock — so True is the more reliable of the two.
-#   True  -> the script force-closes Chrome (incl. those background processes).
-#   False -> the script pauses and asks you to close Chrome yourself.
-# On THIS VM taskkill can't terminate Chrome's protected/background processes, so
-# True didn't reliably free the profile. Set False: you exit Chrome yourself
-# (fully — see the tray) once per run, which is the reliable path here.
-CLOSE_CHROME = False
-# headless=False lets you see the one-time login and lets Chrome autofill work.
-# Once your session persists, you can set this True for silent scheduled runs.
+# The browser to drive. "chrome" = your installed Google Chrome (no download
+# needed). If that isn't present, the script falls back to Playwright's bundled
+# Chromium (run `python -m playwright install chromium` once to have it ready).
+# The browser runs in a fresh, throwaway profile every time — it never touches
+# your real Chrome profile, so your normal Chrome can stay open and nothing has
+# to be closed or copied.
+BROWSER_CHANNEL = "chrome"
+# headless=False shows the browser window (useful for a first run / live demo,
+# and required if you want to log in by hand when no credentials are set).
+# headless=True runs it invisibly for silent scheduled runs.
 HEADLESS = False
 # Seconds to wait after the chart appears, for animations/data to settle.
 RENDER_SETTLE_SECONDS = 4
 # Optional: a CSS selector that only appears once the chart is fully drawn.
 # Leave as "" to use the generic Qlik object container.
 READY_SELECTOR = ""
+
+# --- Qlik login (service account) -------------------------------------------
+# This server uses Qlik Sense INTERNAL FORMS authentication: opening the hub
+# redirects to a web login page (/internal_forms_authentication/) with a
+# username and password field. (Confirmed by curl: /hub/ 302s to that page, and
+# Windows/NTLM SSO does nothing here.) The script logs in by filling that form.
+#
+# Credentials are read from, in order:
+#   1. environment variables QLIK_USERNAME / QLIK_PASSWORD
+#   2. a local file `qlik_credentials.txt` next to this script (KEY=VALUE lines)
+# They are intentionally NOT stored in this file, so the code can be committed
+# and shared without leaking the password. If neither is set and HEADLESS=False,
+# the script pauses so you can log in by hand in the browser window (handy for a
+# demo before the service-account password has been issued).
+CREDENTIALS_FILE = os.path.join(SCRIPT_DIR, "qlik_credentials.txt")
+# CSS selectors for the Qlik login form. These are the Qlik Sense defaults
+# (field names `username` and `pwd`); .first is used so a slightly customized
+# login template still matches. Only touch these if your login page is heavily
+# customized and the defaults don't find the fields.
+LOGIN_USERNAME_SELECTOR = 'input[name="username"], input#username, input[type="text"]'
+LOGIN_PASSWORD_SELECTOR = 'input[name="pwd"], input[name="password"], input[type="password"]'
+LOGIN_SUBMIT_SELECTOR = 'button[type="submit"], input[type="submit"], #loginbtn, .submit-button'
 
 # ==========================================================================
 # END CONFIG.  You normally don't need to edit below this line.
@@ -221,6 +204,36 @@ def load_recipients(path):
     return people
 
 
+def read_credentials():
+    """Return (username, password) for the Qlik service account.
+
+    Looked up from environment variables first, then a local gitignored
+    qlik_credentials.txt (KEY=VALUE lines). Never stored in this script. Returns
+    ("", "") if nothing is configured, in which case the caller falls back to a
+    manual browser login."""
+    user = os.environ.get("QLIK_USERNAME", "").strip()
+    pwd = os.environ.get("QLIK_PASSWORD", "")
+    if user and pwd:
+        return user, pwd
+    if os.path.exists(CREDENTIALS_FILE):
+        try:
+            with open(CREDENTIALS_FILE, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, val = line.split("=", 1)
+                    key = key.strip().upper()
+                    val = val.strip()
+                    if key in ("QLIK_USERNAME", "USERNAME") and not user:
+                        user = val
+                    elif key in ("QLIK_PASSWORD", "PASSWORD") and not pwd:
+                        pwd = val
+        except OSError:
+            pass
+    return user, pwd
+
+
 def build_single_url(employee_name):
     """Build a Single Integration API URL with the employee selection applied."""
     base = TENANT_URL.rstrip("/") + "/single/"
@@ -239,206 +252,85 @@ def build_single_url(employee_name):
     return base + "?" + "&".join(params)
 
 
-def looks_like_login(page):
-    """Heuristic: are we sitting on a login / SSO page rather than the app?"""
-    url = page.url.lower()
-    if "single" in url and "qlikcloud" in url:
-        return False
-    login_markers = ["login", "signin", "sign-in", "auth", "oauth", "sso", "idp"]
-    return any(m in url for m in login_markers)
-
-
-def chrome_is_running():
-    """True if THIS user has a chrome.exe running (it locks the user profile).
-    Chrome.exe in OTHER sessions/VMs on the same host is ignored — those don't
-    touch our profile and we can't (and shouldn't) close them; counting them
-    caused a false 'Chrome is open' prompt. On any error/timeout, assume not
-    running so we never hang or loop forever."""
+def on_login_page(page):
+    """True if we're sitting on Qlik's forms-login page rather than the app."""
+    if "internal_forms_authentication" in (page.url or "").lower():
+        return True
+    # A visible password field also means we're on a login form. If we're on the
+    # hub instead, this simply times out and returns False.
     try:
-        import csv as _csv
-        user = os.environ.get("USERNAME", "").strip().lower()
-        out = subprocess.run(
-            ["tasklist", "/V", "/FI", "IMAGENAME eq chrome.exe",
-             "/FO", "CSV", "/NH"],
-            capture_output=True, text=True, timeout=15,
-        ).stdout
-        if "chrome.exe" not in out.lower():
-            return False
-        # CSV cols: Image,PID,Session,Session#,Mem,Status,User Name,CPU,Title.
-        # Other users' rows show "N/A" for User Name (access denied) -> excluded.
-        for row in _csv.reader(out.splitlines()):
-            if len(row) < 7 or not row[0].lower().startswith("chrome.exe"):
-                continue
-            owner = row[6].split("\\")[-1].strip().lower()
-            if user and owner == user:
-                return True
-        return False
-    except (OSError, subprocess.SubprocessError):
+        page.wait_for_selector('input[type="password"]', timeout=2500)
+        return True
+    except Exception:
         return False
 
 
-def ensure_chrome_closed():
-    """Chrome locks its profile while open, so make sure it's closed before we
-    launch Playwright against CHROME_PROFILE."""
-    if not chrome_is_running():
-        return
-    if CLOSE_CHROME:
-        print("Closing Chrome (incl. background processes) to free its profile...")
-        try:
-            # Scope the kill to THIS user so other sessions'/VMs' Chrome is
-            # untouched (and so it can't fail trying to kill processes we can't).
-            user = os.environ.get("USERNAME", "")
-            domain = os.environ.get("USERDOMAIN", "")
-            who = f"{domain}\\{user}" if domain else user
-            kill = ["taskkill", "/IM", "chrome.exe", "/F"]
-            if user:
-                kill += ["/FI", f"USERNAME eq {who}"]
-            subprocess.run(kill, capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            print(" ! taskkill didn't finish in time (a protected/antivirus "
-                  "process may be blocking it); continuing anyway.")
-        # /F is asynchronous, so wait until the processes are actually gone.
-        for _ in range(20):
-            if not chrome_is_running():
-                break
-            time.sleep(0.5)
-        if chrome_is_running():
-            print(" ! Some chrome.exe could not be closed (likely another user's"
-                  " or protected). Continuing; if launch fails, restart the VM.")
-        return
+def submit_login(page, username, password):
+    """Fill Qlik's forms-login page with the service account and submit."""
+    print("   login page detected; signing in with the Qlik service account...")
+    page.locator(LOGIN_USERNAME_SELECTOR).first.fill(username)
+    page.locator(LOGIN_PASSWORD_SELECTOR).first.fill(password)
+    try:
+        page.locator(LOGIN_SUBMIT_SELECTOR).first.click(timeout=3000)
+    except Exception:
+        # No obvious submit button on this template: submit by pressing Enter.
+        page.locator(LOGIN_PASSWORD_SELECTOR).first.press("Enter")
+    try:
+        page.wait_for_load_state("networkidle", timeout=30000)
+    except Exception:
+        pass
+
+
+def manual_login_pause():
+    """Headed-only fallback: let a human log in by hand, then continue. Used for
+    a live demo before the service-account password has been issued."""
     print("\n" + "=" * 70)
-    print(" Chrome is currently OPEN. It locks the profile this script needs, and")
-    print(" this VM's antivirus won't let the script force-close it, so please")
-    print(" quit Chrome YOURSELF now:")
-    print("   1. Close every Chrome window.")
-    print("   2. Chrome often keeps running in the background: right-click the")
-    print("      Chrome icon in the system tray (bottom-right, may be under the")
-    print("      ^ arrow) and choose Exit. If there's no tray icon, you're good.")
-    print("   (Optional, so this sticks: chrome://settings -> System -> turn OFF")
-    print("    'Continue running background apps when Google Chrome is closed'.)")
-    input(" When Chrome is fully closed, press ENTER to continue... ")
+    print(" Qlik is showing its LOGIN page in the browser window.")
+    print(" Log in there by hand, then come back to this terminal and")
+    input(" press ENTER once you can see your Qlik hub/app... ")
     print("=" * 70 + "\n")
-    if chrome_is_running():
-        print(" ! Chrome still looks like it's running. If the next step fails,"
-              " close Chrome fully and re-run (or set CLOSE_CHROME = True).")
 
 
-def _mark_profile_clean_exit(prefs_path):
-    """Set the profile's exit flags to 'clean' so Chrome shows no 'Restore
-    pages?' prompt and doesn't auto-reopen the previous tabs. Best-effort."""
+def ensure_logged_in(page, username, password):
+    """Open the hub and, if Qlik shows its forms-login page, authenticate. Uses
+    the configured service-account credentials when present; otherwise (headed
+    only) pauses for a manual login."""
+    target = TENANT_URL.rstrip("/") + "/hub/"
+    print(f"Opening Qlik: {target}")
     try:
-        with open(prefs_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        prof = data.setdefault("profile", {})
-        prof["exit_type"] = "Normal"
-        prof["exited_cleanly"] = True
-        with open(prefs_path, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-    except (OSError, ValueError):
-        pass  # best-effort; --disable-session-crashed-bubble still helps
-
-
-def prepare_profile_for_automation():
-    """(In-place mode.) A force-killed Chrome leaves stale singleton lock files
-    (in the User Data root) and an 'exited_cleanly = false' flag. A freshly
-    launched Chrome then hands the session off to the dead instance instead of
-    letting Playwright drive it, so you get stuck on about:blank. Clear both so
-    Chrome starts clean and Playwright controls the window."""
-    for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
-        p = os.path.join(CHROME_USER_DATA_DIR, name)
-        try:
-            if os.path.lexists(p):
-                os.remove(p)
-        except OSError:
-            pass
-    _mark_profile_clean_exit(
-        os.path.join(CHROME_USER_DATA_DIR, CHROME_PROFILE, "Preferences"))
-
-
-def build_profile_copy():
-    """(Copy mode.) Copy the essential parts of your real Chrome profile into a
-    private User Data dir so Playwright launches Chrome from the COPY. Your real
-    profile is never locked, so your normal Chrome can stay open and nothing has
-    to be killed. Returns (user_data_dir, profile_name); the copy is always a
-    "Default" profile regardless of the source profile's name.
-
-    Only small files are copied (cookies + saved login + prefs) — the big Cache
-    dirs are skipped. Files Chrome has locked are skipped best-effort; worst case
-    your Qlik session cookie doesn't copy and you land on the autofill login page
-    instead of a live session (still no password needed)."""
-    import shutil
-    src_root = CHROME_USER_DATA_DIR
-    src_prof = os.path.join(src_root, CHROME_PROFILE)
-    dst_root = AUTOMATION_USER_DATA_DIR
-    dst_prof = os.path.join(dst_root, "Default")
-
-    # Start fresh each run so we always pick up your current session/cookies.
-    if os.path.isdir(dst_root):
-        shutil.rmtree(dst_root, ignore_errors=True)
-    os.makedirs(os.path.join(dst_prof, "Network"), exist_ok=True)
-
-    def _copy(src, dst, label):
-        """Copy one file if present, printing before each so that if the VM's
-        antivirus kills us mid-copy, the LAST 'copying ...' line names the file
-        that triggered it."""
-        if not os.path.exists(src):
-            return
-        print(f"   copying {label} ...", flush=True)
-        try:
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copy2(src, dst)
-        except OSError as e:
-            print(f"   ! could not copy {label}: {e}")
-
-    # Top-level key material needed to decrypt cookies / saved passwords.
-    _copy(os.path.join(src_root, "Local State"),
-          os.path.join(dst_root, "Local State"), "Local State (keys)")
-    # Session cookies (what lets us skip the login entirely).
-    for rel in ("Network/Cookies", "Network/Cookies-journal",
-                "Network/Cookies-wal", "Network/Cookies-shm",
-                "Cookies", "Cookies-journal"):
-        _copy(os.path.join(src_prof, *rel.split("/")),
-              os.path.join(dst_prof, *rel.split("/")), f"cookies ({rel})")
-    _copy(os.path.join(src_prof, "Preferences"),
-          os.path.join(dst_prof, "Preferences"), "preferences")
-    _copy(os.path.join(src_prof, "Secure Preferences"),
-          os.path.join(dst_prof, "Secure Preferences"), "secure preferences")
-    # Saved passwords LAST (most likely to trip antivirus). Skippable.
-    if COPY_LOGIN_DATA:
-        for rel in ("Login Data", "Login Data-journal", "Web Data"):
-            _copy(os.path.join(src_prof, rel),
-                  os.path.join(dst_prof, rel), f"saved login ({rel})")
-
-    _mark_profile_clean_exit(os.path.join(dst_prof, "Preferences"))
-    return dst_root, "Default"
-
-
-def ensure_logged_in(page):
-    """Navigate to the tenant and, if we land on Qlik's forms-login page, pause
-    for a one-time manual login (Chrome autofills the saved credentials; you just
-    submit). A still-live session from the real profile usually skips this."""
-    print(f"Opening Qlik: {TENANT_URL}")
-    try:
-        page.goto(TENANT_URL, wait_until="domcontentloaded", timeout=60000)
-        time.sleep(3)
+        page.goto(target, wait_until="domcontentloaded", timeout=60000)
+        time.sleep(2)
         print(f"   landed at: {page.url}")
     except Exception as e:
-        # Not fatal: fall through to the manual-login pause so you can sign in by
-        # hand. (An earlier build sys.exited here on ERR_INVALID_AUTH_CREDENTIALS
-        # believing this was HTTP auth; curl disproved that — it's forms auth.)
-        print(f"   ! couldn't auto-load the page ({e}); log in manually below.")
+        print(f"   ! couldn't load the page ({e}); will check for a login form.")
 
-    url = (page.url or "").lower()
-    on_form = "internal_forms_authentication" in url
-    if on_form or looks_like_login(page) or "hub" not in url:
-        print("\n" + "=" * 70)
-        print(" Qlik is showing its LOGIN page in the browser window.")
-        print(" Click the username field — Chrome should autofill your saved")
-        print(" login — then submit. (No password to type; you never need to")
-        print(" know it. The session is remembered for a while after.)")
-        print(" When you can see your Qlik hub/app, come back here and")
-        input(" press ENTER to continue... ")
-        print("=" * 70 + "\n")
+    if not on_login_page(page):
+        print("   already logged in (no login form shown).")
+        return
+
+    if username and password:
+        try:
+            submit_login(page, username, password)
+        except Exception as e:
+            print(f"   ! scripted login failed ({e}).")
+        if on_login_page(page):
+            print("   ! still on the login page after submitting "
+                  "(check the credentials / field selectors).")
+            if not HEADLESS:
+                manual_login_pause()
+        else:
+            print(f"   logged in; now at: {page.url}")
+        return
+
+    # No credentials configured.
+    if HEADLESS:
+        sys.exit(
+            "Qlik requires a login but no QLIK_USERNAME/QLIK_PASSWORD is set and "
+            "the run is HEADLESS (can't prompt). Set the credentials (env vars or "
+            "qlik_credentials.txt) or run with HEADLESS = False to log in by hand."
+        )
+    print("   no credentials configured; log in by hand in the browser window.")
+    manual_login_pause()
 
 
 def capture(page, employee_name, out_path):
@@ -491,82 +383,40 @@ def send_email(name, to_address, image_path):
     return "sent"
 
 
+def launch_browser(p):
+    """Launch the configured browser in a fresh throwaway profile. Falls back to
+    Playwright's bundled Chromium if the installed Chrome channel isn't found."""
+    try:
+        return p.chromium.launch(channel=BROWSER_CHANNEL, headless=HEADLESS)
+    except Exception as e:
+        print(f"   ! couldn't launch '{BROWSER_CHANNEL}' ({e}); "
+              f"falling back to Playwright's bundled Chromium.")
+        return p.chromium.launch(headless=HEADLESS)
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-    profile_path = os.path.join(CHROME_USER_DATA_DIR, CHROME_PROFILE)
-    if not os.path.isdir(profile_path):
-        # List the profile folders that DO exist so the fix is obvious.
-        try:
-            found = [
-                d for d in os.listdir(CHROME_USER_DATA_DIR)
-                if os.path.isdir(os.path.join(CHROME_USER_DATA_DIR, d))
-                and (d == "Default" or d.startswith("Profile "))
-            ]
-        except OSError:
-            found = []
-        avail = ", ".join(f'"{d}"' for d in found) if found else "(none found)"
-        sys.exit(
-            f"Chrome profile not found: {profile_path}\n"
-            f"Profiles available in this User Data folder: {avail}\n"
-            f"Set CHROME_PROFILE in CONFIG to one of those. "
-            f"(Open chrome://version and read 'Profile Path'.)"
-        )
 
     people = load_recipients(RECIPIENTS_FILE)
     if MAX_EMPLOYEES is not None:
         people = people[:MAX_EMPLOYEES]
 
+    username, password = read_credentials()
+
     print(f"Processing {len(people)} employee(s). "
           f"REVIEW_MODE={REVIEW_MODE}  "
           f"redirect={'ON -> ' + TEST_REDIRECT_EMAIL if TEST_REDIRECT_EMAIL else 'off'}")
+    print(f"Qlik login: "
+          f"{'service account ' + username if username else 'NONE set (will prompt in the browser)'}")
 
-    if USE_PROFILE_COPY:
-        print("Preparing a private copy of your Chrome profile "
-              "(your normal Chrome can stay open)...")
-        user_data_dir, profile = build_profile_copy()
-    else:
-        ensure_chrome_closed()
-        prepare_profile_for_automation()
-        user_data_dir, profile = CHROME_USER_DATA_DIR, CHROME_PROFILE
-
-    from urllib.parse import urlparse
-    auth_host = urlparse(TENANT_URL).hostname or "*"
-
-    print("Profile ready; starting the browser engine...", flush=True)
+    print("Starting the browser engine...", flush=True)
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        # Drive your INSTALLED Chrome (channel="chrome").
-        print(f"Launching Chrome (profile: {profile})...")
-        args = [
-            f"--profile-directory={profile}",
-            "--disable-session-crashed-bubble",
-            "--hide-crash-restore-bubble",
-            "--no-first-run",
-            "--no-default-browser-check",
-        ]
-        if WINDOWS_INTEGRATED_AUTH:
-            # Let Chrome answer NTLM/Negotiate 401 challenges from the Qlik host
-            # automatically using your current Windows login (no password typed).
-            args.append(f"--auth-server-allowlist={auth_host}")
-            args.append(f"--auth-negotiate-delegate-allowlist={auth_host}")
-        launch_kwargs = dict(
-            channel=BROWSER_CHANNEL,
-            headless=HEADLESS,
-            accept_downloads=False,
-            args=args,
-        )
-        if HTTP_AUTH_USERNAME:
-            # Basic/Digest auth: send these credentials on the request itself.
-            launch_kwargs["http_credentials"] = {
-                "username": HTTP_AUTH_USERNAME,
-                "password": HTTP_AUTH_PASSWORD,
-            }
-        ctx = p.chromium.launch_persistent_context(user_data_dir, **launch_kwargs)
-        # Drive the window Chrome already opened (fall back to a new tab).
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        browser = launch_browser(p)
+        context = browser.new_context()
+        page = context.new_page()
 
-        ensure_logged_in(page)
+        ensure_logged_in(page, username, password)
 
         for i, person in enumerate(people, 1):
             name = person["name"]
@@ -583,7 +433,8 @@ def main():
             except Exception as e:
                 print(f"   ! FAILED for {name}: {e}")
 
-        ctx.close()
+        context.close()
+        browser.close()
 
     print("\nDone. Review the drafts in Outlook (REVIEW_MODE) or check Sent.")
 

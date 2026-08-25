@@ -1,6 +1,32 @@
 # Changelog
 
 ## 2026-08-25
+- Resolved the last open auth question: the username Chrome autofills on the Qlik
+  login form is a **separate Qlik/service account**, not Marcelo's own AD/corporate
+  login, so its password isn't knowable or resettable by him. This confirms the IT
+  path is the only viable one (consistent with the two dead ends already recorded).
+  Drafted a credential request to IT asking for either the existing account's
+  username/password or a dedicated service account with read access to the app.
+- Rewrote the script for a scripted forms login so it's demo-ready and ready to
+  drop the password into the moment IT issues it (Marcelo has a meeting to get
+  sign-off from a stakeholder wary of "AI" on the platform — the point is to show
+  it's a plain login-export-email bot, no AI). Changes:
+  - `ensure_logged_in` now fills Qlik's `/internal_forms_authentication/` form
+    (username + `pwd`) and submits, instead of relying on Chrome autofill. Creds
+    come from env vars `QLIK_USERNAME`/`QLIK_PASSWORD` or a gitignored
+    `qlik_credentials.txt` — never hardcoded, so the auto-push can't leak them.
+    If no creds and headed, it falls back to a manual login pause (lets Marcelo
+    demo by logging in by hand before the password exists).
+  - Dropped ALL the dead auth/profile machinery: real-profile-in-place, the
+    profile-copy path, `CLOSE_CHROME`/`chrome_is_running`/`ensure_chrome_closed`,
+    the singleton-lock cleanup, and the NTLM/`WINDOWS_INTEGRATED_AUTH`/HTTP-auth
+    options. The browser now launches in a fresh throwaway profile
+    (`p.chromium.launch(channel="chrome")`, Chromium fallback), which sidesteps
+    the Chrome-151 default-dir automation block and is fully headless-capable.
+  - Removed now-unused `json`/`subprocess` imports. Rewrote the module docstring
+    and README to state plainly there is no AI/ML/LLM in it and describe the
+    login→export→email flow. `.gitignore` now protects `qlik_credentials.txt`.
+    Byte-compiles clean; runtime not yet exercised (no Qlik creds / not on VM).
 - Pinned down the auth scheme, ending the HTTP/NTLM detour. `page.goto` had been
   failing with `ERR_INVALID_AUTH_CREDENTIALS`, which we'd guessed was HTTP Basic/
   NTLM (added `WINDOWS_INTEGRATED_AUTH` + `--auth-server-allowlist` and
