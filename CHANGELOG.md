@@ -15,6 +15,21 @@
   must come from either (a) scripting the Qlik forms login with real credentials,
   or (b) reusing a live session cookie — decision pending on whether the Qlik
   username/password can be obtained.
+- Ruled out in-place real-profile automation entirely. The VM's Chrome is
+  **151.0.7922.174**; since Chrome 136 (early 2025) Chrome silently disables the
+  remote-debugging pipe when `--user-data-dir` is the DEFAULT profile dir, so
+  Playwright launches Chrome but can never drive it — the observed "about:blank
+  forever." Modern Chrome REQUIRES a non-default dir for automation (i.e. a copy).
+- Confirmed the Qlik session cookie is **session-scoped**: a full Chrome restart
+  drops you back to the login form every time (Chrome re-autofills it, user just
+  presses Enter). So there is no on-disk session cookie to copy — every run needs
+  a FRESH login, which needs the password. The password lives only in Chrome's
+  saved-login store; the AV kills any script that copies it and the user can't
+  view it (no VM Windows password). Net conclusion: **no reliable path without
+  IT** — need the Qlik credentials (or a service account) to script the forms
+  login. Also fixed a real bug: `chrome_is_running()` counted other sessions'/VMs'
+  chrome.exe on the shared host (tasklist is host-wide), causing a false "Chrome
+  is open" prompt; now scoped to the current user via `tasklist /V` CSV owner match.
 
 ## 2026-08-24
 - Fixed the login blocker: the Qlik password is saved in Chrome's password
