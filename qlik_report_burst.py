@@ -18,7 +18,7 @@ import csv
 import os
 import sys
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -81,6 +81,13 @@ CREDENTIALS_FILE = os.path.join(SCRIPT_DIR, "qlik_credentials.txt")
 LOGIN_USERNAME_SELECTOR = 'input[name="username"], input#username, input[type="text"]'
 LOGIN_PASSWORD_SELECTOR = 'input[name="pwd"], input[name="password"], input[type="password"]'
 LOGIN_SUBMIT_SELECTOR = 'button[type="submit"], input[type="submit"], #loginbtn, .submit-button'
+
+# The Qlik host usually sits behind Windows Integrated Auth (NTLM/Negotiate).
+# The automated browser answers that challenge silently with the VM's current
+# Windows login, the same SSO your normal Chrome does before the Qlik form even
+# shows. Without it a fresh profile fails with net::ERR_INVALID_AUTH_CREDENTIALS.
+# Set to "" if your server doesn't use integrated auth.
+AUTH_SERVER_ALLOWLIST = urlparse(TENANT_URL).hostname or ""
 
 # ==========================================================================
 
@@ -289,12 +296,18 @@ def send_email(name, to_address, image_path):
 def launch_browser(p):
     """Launch the configured browser in a throwaway profile, falling back to
     Playwright's bundled Chromium if the installed Chrome channel isn't found."""
+    args = []
+    if AUTH_SERVER_ALLOWLIST:
+        args += [
+            f"--auth-server-allowlist={AUTH_SERVER_ALLOWLIST}",
+            f"--auth-negotiate-delegate-allowlist={AUTH_SERVER_ALLOWLIST}",
+        ]
     try:
-        return p.chromium.launch(channel=BROWSER_CHANNEL, headless=HEADLESS)
+        return p.chromium.launch(channel=BROWSER_CHANNEL, headless=HEADLESS, args=args)
     except Exception as e:
         print(f"   ! couldn't launch '{BROWSER_CHANNEL}' ({e}); "
               f"falling back to Playwright's bundled Chromium.")
-        return p.chromium.launch(headless=HEADLESS)
+        return p.chromium.launch(headless=HEADLESS, args=args)
 
 
 def main():
