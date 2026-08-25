@@ -139,6 +139,20 @@ AUTOMATION_USER_DATA_DIR = os.path.join(SCRIPT_DIR, ".chrome-automation")
 # login page at all). Set True only if you end up on a login page and need
 # Chrome to autofill it — but that may trip your antivirus.
 COPY_LOGIN_DATA = False
+
+# --- HTTP authentication (only if Qlik shows a browser CREDENTIAL POPUP) -----
+# If opening Qlik pops a small username/password DIALOG (HTTP Basic/NTLM auth),
+# not a web page with login fields, the browser must send credentials on the
+# request itself — a copied cookie/profile won't do it. Two options:
+#   1) Windows integrated auth: if the server uses NTLM/Negotiate against your
+#      Windows login, WINDOWS_INTEGRATED_AUTH = True logs you in with NO password
+#      (the browser reuses your current Windows session). Try this first.
+#   2) Explicit credentials: for Basic auth (or a Qlik-specific account), put the
+#      username/password here and they're sent directly. Leave blank to skip.
+WINDOWS_INTEGRATED_AUTH = True
+HTTP_AUTH_USERNAME = ""
+HTTP_AUTH_PASSWORD = ""
+
 # (Only used when USE_PROFILE_COPY = False.) Chrome locks a profile while it's
 # open, so the real profile must be CLOSED during a run. NOTE: Chrome leaves
 # BACKGROUND processes running even after you close every window, and they still
@@ -362,7 +376,21 @@ def build_profile_copy():
 def ensure_logged_in(page):
     """Navigate to the tenant and, if needed, pause for a one-time manual login."""
     print(f"Opening Qlik: {TENANT_URL}")
-    page.goto(TENANT_URL, wait_until="domcontentloaded", timeout=60000)
+    try:
+        page.goto(TENANT_URL, wait_until="domcontentloaded", timeout=60000)
+    except Exception as e:
+        if "ERR_INVALID_AUTH_CREDENTIALS" in str(e):
+            sys.exit(
+                "\nQlik answered with an HTTP authentication challenge (a browser"
+                " credential popup) that this browser couldn't satisfy.\n"
+                "So Qlik here uses HTTP auth, not a web login form. Fix options:\n"
+                "  - If it's Windows/NTLM: WINDOWS_INTEGRATED_AUTH = True is set;\n"
+                "    if it still fails, the server wants a non-Windows account.\n"
+                "  - If it's Basic auth: set HTTP_AUTH_USERNAME / HTTP_AUTH_PASSWORD.\n"
+                "To see which scheme it is, run:  curl.exe -sI http://10.0.2.5/\n"
+                "and look at the 'WWW-Authenticate:' line.\n"
+            )
+        raise
     time.sleep(3)
     print(f"   landed at: {page.url}")
     if looks_like_login(page) or "hub" not in page.url.lower():
@@ -463,26 +491,39 @@ def main():
         prepare_profile_for_automation()
         user_data_dir, profile = CHROME_USER_DATA_DIR, CHROME_PROFILE
 
+    from urllib.parse import urlparse
+    auth_host = urlparse(TENANT_URL).hostname or "*"
+
     print("Profile ready; starting the browser engine...", flush=True)
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        # Drive your INSTALLED Chrome (channel="chrome"). Whether against the
-        # real profile or a private copy, your saved Qlik login / live session
-        # rides along, so no password is ever needed.
+        # Drive your INSTALLED Chrome (channel="chrome").
         print(f"Launching Chrome (profile: {profile})...")
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir,
+        args = [
+            f"--profile-directory={profile}",
+            "--disable-session-crashed-bubble",
+            "--hide-crash-restore-bubble",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ]
+        if WINDOWS_INTEGRATED_AUTH:
+            # Let Chrome answer NTLM/Negotiate 401 challenges from the Qlik host
+            # automatically using your current Windows login (no password typed).
+            args.append(f"--auth-server-allowlist={auth_host}")
+            args.append(f"--auth-negotiate-delegate-allowlist={auth_host}")
+        launch_kwargs = dict(
             channel=BROWSER_CHANNEL,
             headless=HEADLESS,
             accept_downloads=False,
-            args=[
-                f"--profile-directory={profile}",
-                "--disable-session-crashed-bubble",
-                "--hide-crash-restore-bubble",
-                "--no-first-run",
-                "--no-default-browser-check",
-            ],
+            args=args,
         )
+        if HTTP_AUTH_USERNAME:
+            # Basic/Digest auth: send these credentials on the request itself.
+            launch_kwargs["http_credentials"] = {
+                "username": HTTP_AUTH_USERNAME,
+                "password": HTTP_AUTH_PASSWORD,
+            }
+        ctx = p.chromium.launch_persistent_context(user_data_dir, **launch_kwargs)
         # Drive the window Chrome already opened (fall back to a new tab).
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
 
