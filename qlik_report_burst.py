@@ -61,6 +61,9 @@ REVIEW_MODE = True                                # True = open drafts, don't se
 TEST_REDIRECT_EMAIL = "gerson@pennrosefarms.com"  # send all mail here; "" = real recipients
 MAX_EMPLOYEES = 2                                 # cap rows processed; None = all
 
+# Where screenshots are written (next to this script by default).
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "screenshots")
+
 # --- Browser ----------------------------------------------------------------
 # "chrome" uses installed Chrome, falling back to Playwright's bundled Chromium.
 # Runs in a throwaway profile, so it never touches your real Chrome profile.
