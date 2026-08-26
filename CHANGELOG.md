@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-08-26 (email: detail link as text + browser note; faster capture)
+- The "detail of your performance" link now shows friendly text ("View your
+  performance detail") instead of the raw URL, matching the named dashboard link.
+- Added a note telling recipients the links open in their **default browser**,
+  which must be signed in to Qlik for them to work.
+- **Capture speedups** (a 20-employee run spends most of its time here):
+  - `page.goto` now waits on `domcontentloaded` instead of `networkidle`. Qlik
+    holds a websocket open so the page never goes fully idle; readiness is already
+    enforced by the selector wait + object-count-stable loop, so `networkidle`
+    was just adding dead time per employee.
+  - `RENDER_SETTLE_SECONDS` 6 → 3 (the fixed post-render settle; 6×20 = 2 min of
+    pure waiting). This is the speed/quality knob — if any shot looks mid-render,
+    raise it back toward 6.
+
 ## 2026-08-26 (email reformat: "Sales Report" subject + personalized links)
 - Reworked the email to the requested layout:
   - Subject is now `Sales Report {date}` (run date, US `M/D/YYYY`) instead of

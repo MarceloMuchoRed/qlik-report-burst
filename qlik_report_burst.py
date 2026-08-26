@@ -73,7 +73,8 @@ EMAIL_IMAGE_WIDTH = 850
 EMAIL_HTML_BODY = """
 <p>Hi {name},</p>
 <p>Here is your dashboard for this week: <a href="{dashboard_url}">Dashboard Sales KPI Performance v.4</a></p>
-<p>Here is the detail of your performance: <a href="{detail_url}">{detail_url}</a></p>
+<p>Here is the detail of your performance: <a href="{detail_url}">View your performance detail</a></p>
+<p>Note: these links open in your default browser, which must be signed in to Qlik for them to work.</p>
 <p>Any doubts or issues feel free to contact me via email: <a href="mailto:gerson@pennrosefarms.com">gerson@pennrosefarms.com</a></p>
 <p>Problems with your login contact our IT team via email: <a href="mailto:it@pennrosefarms.com">it@pennrosefarms.com</a></p>
 <p><img src="cid:dashboard_image" width="{img_width}"></p>
@@ -113,7 +114,7 @@ HEADLESS = False              # True for silent scheduled runs
 VIEWPORT_WIDTH = 1920
 VIEWPORT_HEIGHT = 1080
 DEVICE_SCALE = 2
-RENDER_SETTLE_SECONDS = 6     # extra settle after objects load, for animations
+RENDER_SETTLE_SECONDS = 3     # extra settle after objects load, for animations
 READY_SELECTOR = ""           # CSS selector that appears once drawn; "" = generic
 
 # --- Qlik login (Windows authentication) ------------------------------------
@@ -351,7 +352,10 @@ def capture(page, employee_name, out_path):
     """Load the filtered single view, wait for the Qlik objects to finish
     rendering, then screenshot it."""
     url = build_single_url(employee_name)
-    page.goto(url, wait_until="networkidle")
+    # domcontentloaded (not networkidle): Qlik holds a websocket open so the page
+    # never goes fully idle; readiness is enforced below by the selector wait and
+    # the object-count-stable loop, so waiting on networkidle only adds dead time.
+    page.goto(url, wait_until="domcontentloaded")
     selector = READY_SELECTOR or ".qv-object"
     try:
         page.wait_for_selector(selector, timeout=30000)
