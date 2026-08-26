@@ -82,6 +82,11 @@ MAX_EMPLOYEES = None                              # cap rows processed; None = a
 # lookup can't run (e.g. engine unreachable), validation is disabled with a
 # warning and everyone is processed as before.
 VALIDATE_NAMES = True
+# Show a Windows pop-up with the run summary at the end (counts of sent/drafted,
+# names skipped as not-found, and any failures). Set False for unattended /
+# scheduled runs with no logged-in desktop, where a modal box has nobody to
+# click it (the same summary is always printed to the console regardless).
+SHOW_SUMMARY_POPUP = True
 
 # Where screenshots are written (next to this script by default).
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "screenshots")
@@ -378,6 +383,44 @@ def send_email(name, to_address, image_path):
     return "sent"
 
 
+def show_summary(succeeded, skipped, failed):
+    """Print, and (if enabled) pop up, a summary of the run. `succeeded` is a list
+    of (name, status) where status is 'sent' or 'drafted'; `skipped` is the list
+    of not-found person dicts; `failed` is a list of (name, error)."""
+    sent = [n for n, s in succeeded if s == "sent"]
+    drafted = [n for n, s in succeeded if s == "drafted"]
+
+    lines = []
+    if sent:
+        lines.append(f"Sent: {len(sent)}")
+    if drafted:
+        lines.append(f"Drafted (not sent, REVIEW_MODE): {len(drafted)}")
+    if skipped:
+        lines.append(f"Skipped - name not found in Qlik: {len(skipped)}")
+        for p in skipped:
+            lines.append(f"   - {p['name']}")
+    if failed:
+        lines.append(f"Failed: {len(failed)}")
+        for name, err in failed:
+            lines.append(f"   - {name}: {err}")
+    if not lines:
+        lines.append("No recipients were processed.")
+    text = "\n".join(lines)
+
+    print("\n=== Summary ===")
+    print(text)
+
+    if SHOW_SUMMARY_POPUP:
+        try:
+            import ctypes
+            # MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST
+            flags = 0x40 | 0x10000 | 0x40000
+            ctypes.windll.user32.MessageBoxW(
+                0, text, "Qlik report burst - summary", flags)
+        except Exception as e:
+            print(f"   ! couldn't show the summary pop-up ({e}).")
+
+
 def launch_browser(p):
     """Launch the configured browser in a throwaway profile, falling back to
     Playwright's bundled Chromium if the installed Chrome channel isn't found."""
@@ -436,6 +479,8 @@ def main():
                 print(f"   {len(valid_norm)} value(s) found in Qlik.")
 
         skipped = []
+        succeeded = []
+        failed = []
         for i, person in enumerate(people, 1):
             name = person["name"]
             recipient = TEST_REDIRECT_EMAIL or person["email"]
@@ -455,18 +500,15 @@ def main():
                 status = send_email(name, recipient, img)
                 print(f"   screenshot saved: {img}")
                 print(f"   email {status}")
+                succeeded.append((name, status))
             except Exception as e:
                 print(f"   ! FAILED for {name}: {e}")
+                failed.append((name, str(e)))
 
         context.close()
         browser.close()
 
-    if skipped:
-        print(f"\n{len(skipped)} recipient(s) skipped — name not found in Qlik "
-              f"'{FILTER_FIELD}':")
-        for person in skipped:
-            print(f"   - {person['name']} ({person['email']})")
-
+    show_summary(succeeded, skipped, failed)
     print("\nDone. Review the drafts in Outlook (REVIEW_MODE) or check Sent.")
 
 
