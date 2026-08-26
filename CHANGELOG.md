@@ -1,6 +1,24 @@
 # Changelog
 
-## 2026-08-26 (name-match safeguard: resolve recipients to exact Qlik value)
+## 2026-08-26 (blank-chart fix + accent matching + ID preflight)
+- **One of 14 test screenshots came out with the main chart blank** (KPI text
+  loaded, so data/selection were fine — the chart just hadn't painted). Root
+  cause: the readiness loop counted `.qv-object` *containers*, which appear before
+  the chart paints its `<canvas>`/`<svg>`; trimming `RENDER_SETTLE_SECONDS` 6→3
+  earlier widened the gap. Fix: wait until BOTH the container count and the
+  painted chart-element (canvas/svg) count stop growing for two consecutive reads,
+  then settle; restored `RENDER_SETTLE_SECONDS` to 5. Not verified against live
+  Qlik (no access on the dev box) — re-run the test to confirm.
+- **Accent-insensitive name matching.** `_normalize_name` now also strips
+  diacritics (NFKD + drop combining marks), so "Jose Nunez Jr" matches Qlik's
+  "José Núñez Jr." regardless of which side carries the accents. Both sides are
+  normalized; the exact Qlik value is still what gets selected/linked.
+- **Preflight `verify_ids()`** confirms `APP_ID` opens and `SHEET_ID` /
+  `DETAIL_SHEET_ID` exist (engine `GetObjects` over the same authenticated
+  websocket as the name lookup) before processing, and aborts with a clear
+  message if one is missing. Best-effort: any error running the check → warn and
+  continue (never blocks a good run over a preflight glitch). Engine call not
+  verified against live Qlik yet.
 - A recipient listed as "…Jr" didn't match Qlik's "…Jr." and was silently
   SKIPPED (validation already did `strip().casefold()`, but not trailing-period /
   whitespace differences). Just loosening validation would be worse — the name is

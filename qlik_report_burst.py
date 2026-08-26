@@ -23,6 +23,7 @@ import csv
 import os
 import sys
 import time
+import unicodedata
 from datetime import date
 from urllib.parse import quote
 
@@ -114,7 +115,7 @@ HEADLESS = False              # True for silent scheduled runs
 VIEWPORT_WIDTH = 1920
 VIEWPORT_HEIGHT = 1080
 DEVICE_SCALE = 2
-RENDER_SETTLE_SECONDS = 3     # extra settle after objects load, for animations
+RENDER_SETTLE_SECONDS = 5     # cushion after charts paint (on top of the render wait)
 READY_SELECTOR = ""           # CSS selector that appears once drawn; "" = generic
 
 # --- Qlik login (Windows authentication) ------------------------------------
@@ -222,11 +223,14 @@ def build_detail_url(employee_name, sheet_id):
 
 
 def _normalize_name(s):
-    """Loose key for matching a recipient name to a Qlik field value: case- and
-    whitespace-insensitive and ignoring a trailing period, so a recipient listed
-    as "Jane Doe Jr" still matches Qlik's "Jane Doe Jr.". Used only to look up the
-    exact Qlik value; that exact value is what gets selected/linked downstream."""
-    return " ".join(str(s).split()).casefold().rstrip(". ")
+    """Loose key for matching a recipient name to a Qlik field value: case-,
+    whitespace-, accent- and trailing-period-insensitive, so "Jose Nunez Jr"
+    matches Qlik's "José Núñez Jr.". Applied to BOTH sides, so it doesn't matter
+    which one carries the accents. Used only to look up the exact Qlik value; that
+    exact value is what gets selected/linked downstream."""
+    s = " ".join(str(s).split()).casefold().rstrip(". ")
+    s = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in s if not unicodedata.combining(c))
 
 
 def ensure_logged_in(page):
@@ -356,6 +360,79 @@ def fetch_valid_field_values(page):
     return set(values)
 
 
+def verify_ids(page):
+    """Best-effort preflight: confirm APP_ID opens and the sheet IDs exist, over
+    the same authenticated engine websocket used for the name lookup. Returns None
+    if the check itself couldn't run (caller then warns and continues rather than
+    blocking a good run); otherwise {"appOk": bool, "sheets": [ids] or None}."""
+    base = TENANT_URL.rstrip("/")
+    if base.startswith("https://"):
+        ws_url = "wss://" + base[len("https://"):]
+    elif base.startswith("http://"):
+        ws_url = "ws://" + base[len("http://"):]
+    else:
+        ws_url = "ws://" + base
+    ws_url = ws_url + "/app/" + APP_ID
+
+    js = r"""
+    async ({ wsUrl, appId }) => {
+      const TIMEOUT_MS = 20000;
+      const ws = new WebSocket(wsUrl);
+      const pending = {};
+      let idc = 0;
+      ws.onmessage = (ev) => {
+        let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+        if (m.id && pending[m.id]) { const cb = pending[m.id]; delete pending[m.id]; cb(m); }
+      };
+      const opened = new Promise((res, rej) => {
+        ws.onopen = () => res();
+        ws.onerror = () => rej(new Error('websocket connection failed'));
+      });
+      const timeout = new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('engine check timed out')), TIMEOUT_MS));
+      const call = (handle, method, params) => new Promise((res, rej) => {
+        const id = ++idc;
+        pending[id] = (m) => {
+          if (m.error) rej(new Error((m.error && m.error.message) || 'engine error'));
+          else res(m.result);
+        };
+        ws.send(JSON.stringify({ jsonrpc: '2.0', id, handle, method, params }));
+      });
+      const run = (async () => {
+        await opened;
+        let docHandle = -1;
+        try {
+          const a = await call(-1, 'GetActiveDoc', []);
+          if (a && a.qReturn && typeof a.qReturn.qHandle === 'number' && a.qReturn.qHandle >= 0)
+            docHandle = a.qReturn.qHandle;
+        } catch (e) { /* fall through to OpenDoc */ }
+        if (docHandle < 0) {
+          try {
+            const od = await call(-1, 'OpenDoc', [appId, '', '', '', false]);
+            docHandle = od.qReturn.qHandle;
+          } catch (e) { return { appOk: false, sheets: null }; }
+        }
+        try {
+          const r = await call(docHandle, 'GetObjects',
+            [{ qOptions: { qTypes: ['sheet'], qIncludeSessionObjects: false, qData: {} } }]);
+          const list = (r && r.qList) || [];
+          const sheets = list.map(e => e.qInfo && e.qInfo.qId).filter(Boolean);
+          return { appOk: true, sheets };
+        } catch (e) {
+          return { appOk: true, sheets: null };
+        }
+      })();
+      try { return await Promise.race([run, timeout]); }
+      finally { try { ws.close(); } catch (e) {} }
+    }
+    """
+    try:
+        return page.evaluate(js, {"wsUrl": ws_url, "appId": APP_ID})
+    except Exception as e:
+        print(f"   ! couldn't verify app/sheet IDs ({e}); continuing without the check.")
+        return None
+
+
 def capture(page, employee_name, out_path):
     """Load the filtered single view, wait for the Qlik objects to finish
     rendering, then screenshot it."""
@@ -371,15 +448,24 @@ def capture(page, employee_name, out_path):
         print(f"   ! '{selector}' never appeared for {employee_name}; "
               f"screenshotting whatever is on screen.")
 
-    # Qlik lazy-loads its charts, so the object count climbs as they appear.
-    # Wait until it stops growing before the fixed settle, so we don't shoot a
-    # half-rendered dashboard.
-    prev = -1
-    for _ in range(30):  # up to ~15s
-        count = page.locator(selector).count()
-        if count > 0 and count == prev:
-            break
-        prev = count
+    # Qlik lazy-loads in two stages: the object *containers* (`.qv-object`) appear
+    # first, then each chart paints into a <canvas>/<svg> a beat later. Waiting on
+    # the container count alone can fire while a chart is still blank — the KPI
+    # text is present but the main chart hasn't drawn (the empty-chart bug). So
+    # wait until BOTH the container count and the painted chart-element count stop
+    # growing, for two consecutive reads, before the fixed settle.
+    prev = (-1, -1)
+    stable = 0
+    for _ in range(40):  # up to ~20s
+        objs = page.locator(selector).count()
+        arts = page.locator(f"{selector} canvas, {selector} svg").count()
+        if objs > 0 and (objs, arts) == prev:
+            stable += 1
+            if stable >= 2:
+                break
+        else:
+            stable = 0
+        prev = (objs, arts)
         page.wait_for_timeout(500)
     time.sleep(RENDER_SETTLE_SECONDS)
 
@@ -507,6 +593,22 @@ def main():
         page = context.new_page()
 
         ensure_logged_in(page)
+
+        # Preflight: verify the app and sheet IDs exist before doing any work.
+        print("Verifying app/sheet IDs...")
+        ids = verify_ids(page)
+        if ids is not None:
+            if ids.get("appOk") is False:
+                sys.exit(f"App ID not found in Qlik: {APP_ID}. Check APP_ID in CONFIG.")
+            sheets = ids.get("sheets")
+            if sheets is not None:
+                missing = [s for s in {SHEET_ID, DETAIL_SHEET_ID} if s and s not in sheets]
+                if missing:
+                    sys.exit("Sheet ID(s) not found in the app: " + ", ".join(missing)
+                             + ". Check SHEET_ID / DETAIL_SHEET_ID in CONFIG.")
+                print(f"   app + {len(sheets)} sheet(s) OK.")
+            else:
+                print("   app opened, but couldn't list sheets; skipping sheet check.")
 
         # Look up the real field values so unknown names are caught before they
         # render (and get emailed) the whole-company dashboard, and so a recipient
