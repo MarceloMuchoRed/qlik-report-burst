@@ -24,8 +24,19 @@
   and reports; staying on `/internal_windows_authentication/` means the creds
   were rejected. Credentials are now mandatory (script exits if unset). Also
   fixed the stale `SHEET_ID` (was `1266bc38-...`, now `6527c8b7-...` from the live
-  app URL). Byte-compiles clean; **live-run confirmation pending** (this run had
-  not yet been verified end-to-end on the VM at commit time).
+  app URL). Byte-compiles clean.
+- **CONFIRMED working end-to-end on the VM:** with `http_credentials` sending
+  `gmrqlik`, the bot authenticates as the licensed account and the dashboard
+  renders (no more "no access pass"). Auth chapter closed.
+- Screenshot-quality pass (dashboards came out zoomed wrong with some charts
+  missing). Root causes: (1) Playwright's default 1280x720 viewport made Qlik use
+  a cramped/rescaled layout, (2) charts lazy-load and we shot too early. Fix: set
+  a `VIEWPORT_WIDTH/HEIGHT` (1920x1080) + `DEVICE_SCALE=2` context for a full,
+  crisp desktop render, and in `capture()` wait for the `.qv-object` count to
+  stop growing before the (now 6s) settle. Rejected switching to PDF: browser
+  `page.pdf()` inherits the same viewport/timing problems and print-CSS makes
+  dashboards worse; only Qlik NPrinting is a genuinely better PDF path, but it's
+  a separate licensed product — deferred unless screenshots prove insufficient.
 
 ## 2026-08-25
 - Resolved the last open auth question: the username Chrome autofills on the Qlik

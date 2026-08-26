@@ -74,7 +74,14 @@ OUTPUT_DIR = os.path.join(SCRIPT_DIR, "screenshots")
 # Runs in a throwaway profile, so it never touches your real Chrome profile.
 BROWSER_CHANNEL = "chrome"
 HEADLESS = False              # True for silent scheduled runs
-RENDER_SETTLE_SECONDS = 4     # settle time after the chart appears
+# Screenshot canvas. A larger viewport makes Qlik render its full desktop layout
+# (a small viewport triggers a cramped/rescaled "small screen" layout); bump it
+# if your dashboard is bigger. DEVICE_SCALE = 2 doubles pixel density for crisp
+# images (a 1920x1080 viewport then yields a 3840x2160 shot).
+VIEWPORT_WIDTH = 1920
+VIEWPORT_HEIGHT = 1080
+DEVICE_SCALE = 2
+RENDER_SETTLE_SECONDS = 6     # extra settle after objects load, for animations
 READY_SELECTOR = ""           # CSS selector that appears once drawn; "" = generic
 
 # --- Qlik login (Windows authentication) ------------------------------------
@@ -188,7 +195,8 @@ def ensure_logged_in(page):
 
 
 def capture(page, employee_name, out_path):
-    """Load the filtered single view and screenshot it."""
+    """Load the filtered single view, wait for the Qlik objects to finish
+    rendering, then screenshot it."""
     url = build_single_url(employee_name)
     page.goto(url, wait_until="networkidle")
     selector = READY_SELECTOR or ".qv-object"
@@ -197,6 +205,17 @@ def capture(page, employee_name, out_path):
     except Exception:
         print(f"   ! '{selector}' never appeared for {employee_name}; "
               f"screenshotting whatever is on screen.")
+
+    # Qlik lazy-loads its charts, so the object count climbs as they appear.
+    # Wait until it stops growing before the fixed settle, so we don't shoot a
+    # half-rendered dashboard.
+    prev = -1
+    for _ in range(30):  # up to ~15s
+        count = page.locator(selector).count()
+        if count > 0 and count == prev:
+            break
+        prev = count
+        page.wait_for_timeout(500)
     time.sleep(RENDER_SETTLE_SECONDS)
 
     element = None
@@ -272,7 +291,9 @@ def main():
         # Answer the Qlik proxy's Windows-auth (NTLM/Negotiate) challenge with the
         # service account, rather than the VM's ambient login.
         context = browser.new_context(
-            http_credentials={"username": username, "password": password}
+            http_credentials={"username": username, "password": password},
+            viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
+            device_scale_factor=DEVICE_SCALE,
         )
         page = context.new_page()
 
