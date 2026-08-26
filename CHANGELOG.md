@@ -1,19 +1,5 @@
 # Changelog
 
-## 2026-08-26 (disable ID preflight — it broke the first capture)
-- After adding `verify_ids()`, captures started showing Qlik's "a resource could
-  not be found" on the FIRST person's `/single/` URL, before the screenshot — even
-  though that URL (sheet `6527c8b7`) is byte-identical to when it worked. Process
-  of elimination: the prior popup-free run already had the `domcontentloaded`
-  timing, and the content-wait/accent changes are local-only, so the only new
-  server-touching change was the preflight — which opens an EXTRA engine session
-  (OpenDoc) right before the run. On the access-limited `gmrqlik` account that
-  session appears to starve the first capture's session.
-- Gated the preflight behind `RUN_ID_PREFLIGHT` (default **False**), restoring the
-  known-good behavior. The check remains available to run in isolation. If a
-  lighter ID check is wanted later, it should reuse the existing session rather
-  than open a new one.
-
 ## 2026-08-26 (blank-chart fix + accent matching + ID preflight)
 - **One of 14 test screenshots came out with the main chart blank** (KPI text
   loaded, so data/selection were fine — the chart just hadn't painted). Root
