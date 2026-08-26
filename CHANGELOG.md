@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-08-26 (email image sizing + unknown-name validation)
+- **Embedded dashboard image came out huge in Outlook.** The screenshot is
+  captured at high resolution (1920×1080 @2× = 3840px wide) and the `<img>` had
+  no size, so Outlook rendered it at full pixel width. Set a display width on the
+  tag (`EMAIL_IMAGE_WIDTH`, now 850) so it downscales in the client while keeping
+  the high-res pixels for a crisp render.
+- **Constrained-width `<img>` cropped the logo in Outlook.** A first attempt used
+  `style="width:…; max-width:100%; height:auto;"`; Outlook's desktop (Word)
+  rendering engine mishandles that CSS on large images and clipped the logo. The
+  capture code was never touched (PNG byte-identical) — it was purely an email
+  render effect. Fix: use only the bare `width` HTML attribute, which Outlook
+  scales proportionally without clipping.
+- **Unknown recipient names silently got the whole-company dashboard.** A test
+  row ("Tom Brady", not a real salesperson) rendered company-wide totals instead
+  of erroring — the Single Integration API ignores a `select=Field,Value` whose
+  value isn't in the field, applying no filter. That's a data-exposure risk (an
+  unknown recipient would be emailed the entire company's numbers). Fix: added
+  `fetch_valid_field_values()` — it opens an engine JSON-RPC WebSocket from inside
+  the already-authenticated browser page, reads the full list of `FILTER_FIELD`
+  values via a session list object, and `main()` skips + reports any recipient
+  whose name isn't among them (case/space-insensitive match). Gated by
+  `VALIDATE_NAMES`; if the lookup fails it's disabled with a warning and everyone
+  is processed as before. **Untested against the live engine — needs one VM run
+  to confirm the WebSocket lookup returns the salesperson list.**
+
 ## 2026-08-25 (auth scheme correction — Windows auth, not forms)
 - **Confirmed the real auth scheme once IT issued the `gmrqlik` service account:
   the Qlik virtual proxy uses WINDOWS authentication, not forms.** The login URL
