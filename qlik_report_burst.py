@@ -54,10 +54,16 @@ EMAIL_COLUMN = "Email"
 # Email content. {name} is substituted per employee; the image embeds inline
 # via the cid referenced in the body.
 EMAIL_SUBJECT = "Your weekly dashboard - {name}"
+# On-screen display width of the embedded image, in pixels. The screenshot is
+# captured at high resolution (VIEWPORT_WIDTH x DEVICE_SCALE), so Outlook would
+# otherwise show it at its full pixel width. Setting a width downscales it in the
+# client for a sensible size while keeping the extra pixels for a crisp render.
+# ~650px fits most Outlook reading panes without horizontal scroll.
+EMAIL_IMAGE_WIDTH = 650
 EMAIL_HTML_BODY = """
 <p>Hi {name},</p>
 <p>Here is your dashboard for this week:</p>
-<p><img src="cid:dashboard_image"></p>
+<p><img src="cid:dashboard_image" width="{img_width}" style="width:{img_width}px; max-width:100%; height:auto;"></p>
 <p>Regards</p>
 """
 
@@ -244,7 +250,7 @@ def send_email(name, to_address, image_path):
         )
     except Exception:
         pass  # if the cid fails, the image still rides along as an attachment
-    mail.HTMLBody = EMAIL_HTML_BODY.format(name=name)
+    mail.HTMLBody = EMAIL_HTML_BODY.format(name=name, img_width=EMAIL_IMAGE_WIDTH)
 
     if REVIEW_MODE:
         mail.Display(False)  # open as a draft; does not send
