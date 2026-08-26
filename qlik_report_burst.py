@@ -58,19 +58,22 @@ EMAIL_SUBJECT = "Your weekly dashboard - {name}"
 # captured at high resolution (VIEWPORT_WIDTH x DEVICE_SCALE), so Outlook would
 # otherwise show it at its full pixel width. Setting a width downscales it in the
 # client for a sensible size while keeping the extra pixels for a crisp render.
-# ~650px fits most Outlook reading panes without horizontal scroll.
-EMAIL_IMAGE_WIDTH = 650
+# ~850px fits most Outlook reading panes without horizontal scroll.
+# NOTE: use only the plain width attribute here. Outlook's desktop (Word) engine
+# mishandles CSS like max-width/height:auto on large images and can CROP them;
+# the bare width attribute makes it scale height proportionally, no clipping.
+EMAIL_IMAGE_WIDTH = 850
 EMAIL_HTML_BODY = """
 <p>Hi {name},</p>
 <p>Here is your dashboard for this week:</p>
-<p><img src="cid:dashboard_image" width="{img_width}" style="width:{img_width}px; max-width:100%; height:auto;"></p>
+<p><img src="cid:dashboard_image" width="{img_width}"></p>
 <p>Regards</p>
 """
 
 # --- Test / safety switches -------------------------------------------------
 REVIEW_MODE = True                                # True = open drafts, don't send
 TEST_REDIRECT_EMAIL = "gerson@pennrosefarms.com"  # send all mail here; "" = real recipients
-MAX_EMPLOYEES = 2                                 # cap rows processed; None = all
+MAX_EMPLOYEES = None                              # cap rows processed; None = all
 
 # Where screenshots are written (next to this script by default).
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "screenshots")
