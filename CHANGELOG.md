@@ -8,13 +8,16 @@
     Performance v.4" link and the raw URL), each a Qlik Sense client deep link
     (`…/sheet/<SHEET_ID>/state/analysis/options/clearselections/select/
     SALESPERSON_ORDER/<name>`) so each recipient lands on only their own results.
-    Both use the current capture `SHEET_ID` (`6527c8b7…`); the name is URL-encoded.
+    The "dashboard" link uses `SHEET_ID` (`6527c8b7…`, same as the screenshot);
+    the "detail" link uses a separate `DETAIL_SHEET_ID` (`1266bc38…`). Name is
+    URL-encoded.
   - Added contact lines (`gerson@pennrosefarms.com` for questions,
     `it@pennrosefarms.com` for login issues) and moved the embedded screenshot
     below them, above "Regards".
-- New `build_detail_url(name)` helper builds the deep link from TENANT_URL/APP_ID/
-  SHEET_ID/FILTER_FIELD; `EMAIL_HTML_BODY` gains `{detail_url}` and the subject
-  gains `{date}`. Byte-compiles clean; runtime not re-exercised (needs the VM).
+- New `build_detail_url(name, sheet_id)` helper builds the deep link from
+  TENANT_URL/APP_ID/`sheet_id`/FILTER_FIELD; `EMAIL_HTML_BODY` gains
+  `{dashboard_url}` + `{detail_url}` and the subject gains `{date}`. Byte-compiles
+  clean; runtime not re-exercised (needs the VM).
 
 ## 2026-08-26 (regained personal-account access in the VM's Chrome)
 - **`gmrqlik` is a limited service account** and can't open an app Marcelo built

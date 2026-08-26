@@ -44,6 +44,10 @@ APP_ID = "48ab9fa2-5dc9-48f1-8b0e-25041e6313bd"
 OBJECT_ID = ""
 SHEET_ID = "6527c8b7-f73a-4a7c-962c-6f347d52a009"
 
+# Sheet for the email's "detail of your performance" link. Can differ from the
+# screenshot's SHEET_ID (which the capture and the "dashboard" link both use).
+DETAIL_SHEET_ID = "1266bc38-8212-4401-aa26-b3652bb6483d"
+
 # The filter field, exactly as Qlik names it (case-sensitive).
 FILTER_FIELD = "SALESPERSON_ORDER"
 
@@ -53,8 +57,9 @@ NAME_COLUMN = "Employee"
 EMAIL_COLUMN = "Email"
 
 # Email content placeholders: {name} = employee full name, {date} = run date
-# (M/D/YYYY), {detail_url} = the employee's personalized dashboard deep link.
-# The image embeds inline via the cid referenced in the body.
+# (M/D/YYYY), {dashboard_url} = link to the dashboard sheet (SHEET_ID),
+# {detail_url} = link to the detail sheet (DETAIL_SHEET_ID); both are personalized
+# to the employee. The image embeds inline via the cid referenced in the body.
 EMAIL_SUBJECT = "Sales Report {date}"
 # On-screen display width of the embedded image, in pixels. The screenshot is
 # captured at high resolution (VIEWPORT_WIDTH x DEVICE_SCALE), so Outlook would
@@ -67,7 +72,7 @@ EMAIL_SUBJECT = "Sales Report {date}"
 EMAIL_IMAGE_WIDTH = 850
 EMAIL_HTML_BODY = """
 <p>Hi {name},</p>
-<p>Here is your dashboard for this week: <a href="{detail_url}">Dashboard Sales KPI Performance v.4</a></p>
+<p>Here is your dashboard for this week: <a href="{dashboard_url}">Dashboard Sales KPI Performance v.4</a></p>
 <p>Here is the detail of your performance: <a href="{detail_url}">{detail_url}</a></p>
 <p>Any doubts or issues feel free to contact me via email: <a href="mailto:gerson@pennrosefarms.com">gerson@pennrosefarms.com</a></p>
 <p>Problems with your login contact our IT team via email: <a href="mailto:it@pennrosefarms.com">it@pennrosefarms.com</a></p>
@@ -202,14 +207,14 @@ def build_single_url(employee_name):
     return base + "?" + "&".join(params)
 
 
-def build_detail_url(employee_name):
-    """Build a Qlik Sense client deep link that opens the app on SHEET_ID with the
-    employee selected in FILTER_FIELD, so the recipient lands on only their own
-    results. Mirrors the hub URL shape (…/state/analysis/…/select/FIELD/VALUE)."""
+def build_detail_url(employee_name, sheet_id):
+    """Build a Qlik Sense client deep link that opens the app on `sheet_id` with
+    the employee selected in FILTER_FIELD, so the recipient lands on only their
+    own results. Mirrors the hub URL shape (…/state/analysis/…/select/FIELD/VALUE)."""
     base = TENANT_URL.rstrip("/")
     value = quote(str(employee_name), safe="")
     return (
-        f"{base}/sense/app/{APP_ID}/sheet/{SHEET_ID}"
+        f"{base}/sense/app/{APP_ID}/sheet/{sheet_id}"
         f"/state/analysis/options/clearselections"
         f"/select/{FILTER_FIELD}/{value}"
     )
@@ -395,7 +400,8 @@ def send_email(name, to_address, image_path):
         pass  # if the cid fails, the image still rides along as an attachment
     mail.HTMLBody = EMAIL_HTML_BODY.format(
         name=name,
-        detail_url=build_detail_url(name),
+        dashboard_url=build_detail_url(name, SHEET_ID),
+        detail_url=build_detail_url(name, DETAIL_SHEET_ID),
         img_width=EMAIL_IMAGE_WIDTH,
     )
 
