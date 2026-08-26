@@ -23,6 +23,7 @@ import csv
 import os
 import sys
 import time
+from datetime import date
 from urllib.parse import quote
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,9 +52,10 @@ RECIPIENTS_FILE = os.path.join(SCRIPT_DIR, "recipients.xlsx")
 NAME_COLUMN = "Employee"
 EMAIL_COLUMN = "Email"
 
-# Email content. {name} is substituted per employee; the image embeds inline
-# via the cid referenced in the body.
-EMAIL_SUBJECT = "Your weekly dashboard - {name}"
+# Email content placeholders: {name} = employee full name, {date} = run date
+# (M/D/YYYY), {detail_url} = the employee's personalized dashboard deep link.
+# The image embeds inline via the cid referenced in the body.
+EMAIL_SUBJECT = "Sales Report {date}"
 # On-screen display width of the embedded image, in pixels. The screenshot is
 # captured at high resolution (VIEWPORT_WIDTH x DEVICE_SCALE), so Outlook would
 # otherwise show it at its full pixel width. Setting a width downscales it in the
@@ -65,7 +67,10 @@ EMAIL_SUBJECT = "Your weekly dashboard - {name}"
 EMAIL_IMAGE_WIDTH = 850
 EMAIL_HTML_BODY = """
 <p>Hi {name},</p>
-<p>Here is your dashboard for this week:</p>
+<p>Here is your dashboard for this week: <a href="{detail_url}">Dashboard Sales KPI Performance v.4</a></p>
+<p>Here is the detail of your performance: <a href="{detail_url}">{detail_url}</a></p>
+<p>Any doubts or issues feel free to contact me via email: <a href="mailto:gerson@pennrosefarms.com">gerson@pennrosefarms.com</a></p>
+<p>Problems with your login contact our IT team via email: <a href="mailto:it@pennrosefarms.com">it@pennrosefarms.com</a></p>
 <p><img src="cid:dashboard_image" width="{img_width}"></p>
 <p>Regards</p>
 """
@@ -195,6 +200,19 @@ def build_single_url(employee_name):
     params.append(f"select={sel}")
     params.append("opt=nointeraction")  # hide selection bars/toolbars for a clean shot
     return base + "?" + "&".join(params)
+
+
+def build_detail_url(employee_name):
+    """Build a Qlik Sense client deep link that opens the app on SHEET_ID with the
+    employee selected in FILTER_FIELD, so the recipient lands on only their own
+    results. Mirrors the hub URL shape (…/state/analysis/…/select/FIELD/VALUE)."""
+    base = TENANT_URL.rstrip("/")
+    value = quote(str(employee_name), safe="")
+    return (
+        f"{base}/sense/app/{APP_ID}/sheet/{SHEET_ID}"
+        f"/state/analysis/options/clearselections"
+        f"/select/{FILTER_FIELD}/{value}"
+    )
 
 
 def ensure_logged_in(page):
@@ -363,7 +381,8 @@ def send_email(name, to_address, image_path):
     outlook = win32com.client.Dispatch("Outlook.Application")
     mail = outlook.CreateItem(0)  # 0 = olMailItem
     mail.To = to_address
-    mail.Subject = EMAIL_SUBJECT.format(name=name)
+    today = date.today()
+    mail.Subject = EMAIL_SUBJECT.format(date=f"{today.month}/{today.day}/{today.year}")
 
     attachment = mail.Attachments.Add(os.path.abspath(image_path))
     try:
@@ -374,7 +393,11 @@ def send_email(name, to_address, image_path):
         )
     except Exception:
         pass  # if the cid fails, the image still rides along as an attachment
-    mail.HTMLBody = EMAIL_HTML_BODY.format(name=name, img_width=EMAIL_IMAGE_WIDTH)
+    mail.HTMLBody = EMAIL_HTML_BODY.format(
+        name=name,
+        detail_url=build_detail_url(name),
+        img_width=EMAIL_IMAGE_WIDTH,
+    )
 
     if REVIEW_MODE:
         mail.Display(False)  # open as a draft; does not send

@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-08-26 (email reformat: "Sales Report" subject + personalized links)
+- Reworked the email to the requested layout:
+  - Subject is now `Sales Report {date}` (run date, US `M/D/YYYY`) instead of
+    `Your weekly dashboard - {name}`.
+  - Body adds two personalized dashboard links (a named "Dashboard Sales KPI
+    Performance v.4" link and the raw URL), each a Qlik Sense client deep link
+    (`…/sheet/<SHEET_ID>/state/analysis/options/clearselections/select/
+    SALESPERSON_ORDER/<name>`) so each recipient lands on only their own results.
+    Both use the current capture `SHEET_ID` (`6527c8b7…`); the name is URL-encoded.
+  - Added contact lines (`gerson@pennrosefarms.com` for questions,
+    `it@pennrosefarms.com` for login issues) and moved the embedded screenshot
+    below them, above "Regards".
+- New `build_detail_url(name)` helper builds the deep link from TENANT_URL/APP_ID/
+  SHEET_ID/FILTER_FIELD; `EMAIL_HTML_BODY` gains `{detail_url}` and the subject
+  gains `{date}`. Byte-compiles clean; runtime not re-exercised (needs the VM).
+
 ## 2026-08-26 (regained personal-account access in the VM's Chrome)
 - **`gmrqlik` is a limited service account** and can't open an app Marcelo built
   under his own Qlik account, so he needed his personal login to auto-fill again
