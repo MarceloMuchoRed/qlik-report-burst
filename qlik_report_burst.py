@@ -221,6 +221,14 @@ def build_detail_url(employee_name, sheet_id):
     )
 
 
+def _normalize_name(s):
+    """Loose key for matching a recipient name to a Qlik field value: case- and
+    whitespace-insensitive and ignoring a trailing period, so a recipient listed
+    as "Jane Doe Jr" still matches Qlik's "Jane Doe Jr.". Used only to look up the
+    exact Qlik value; that exact value is what gets selected/linked downstream."""
+    return " ".join(str(s).split()).casefold().rstrip(". ")
+
+
 def ensure_logged_in(page):
     """Open the hub. The Windows-auth challenge is answered at the HTTP layer by
     the context's http_credentials, so this just navigates and reports where we
@@ -501,15 +509,18 @@ def main():
         ensure_logged_in(page)
 
         # Look up the real field values so unknown names are caught before they
-        # render (and get emailed) the whole-company dashboard. None = lookup
-        # unavailable, so we don't enforce it.
-        valid_norm = None
+        # render (and get emailed) the whole-company dashboard, and so a recipient
+        # spelled slightly differently (e.g. "Jr" vs Qlik's "Jr.") resolves to the
+        # exact Qlik value. None = lookup unavailable, so we don't enforce it.
+        canon_map = None  # normalized name -> exact Qlik field value
         if VALIDATE_NAMES:
             print(f"Checking recipient names against Qlik '{FILTER_FIELD}'...")
             valid_values = fetch_valid_field_values(page)
             if valid_values is not None:
-                valid_norm = {v.strip().casefold() for v in valid_values}
-                print(f"   {len(valid_norm)} value(s) found in Qlik.")
+                canon_map = {}
+                for v in valid_values:
+                    canon_map.setdefault(_normalize_name(v), v)
+                print(f"   {len(valid_values)} value(s) found in Qlik.")
 
         skipped = []
         succeeded = []
@@ -518,19 +529,28 @@ def main():
             name = person["name"]
             recipient = TEST_REDIRECT_EMAIL or person["email"]
 
-            if valid_norm is not None and name.strip().casefold() not in valid_norm:
-                print(f"[{i}/{len(people)}] {name} -> SKIPPED "
-                      f"(not found in Qlik '{FILTER_FIELD}'); no email sent.")
-                skipped.append(person)
-                continue
+            # Resolve to the exact Qlik value (handles case/spacing/trailing-period
+            # differences); that exact value is what we select and link, so a
+            # near-miss never silently shoots the whole-company dashboard.
+            qlik_name = name
+            if canon_map is not None:
+                resolved = canon_map.get(_normalize_name(name))
+                if resolved is None:
+                    print(f"[{i}/{len(people)}] {name} -> SKIPPED "
+                          f"(not found in Qlik '{FILTER_FIELD}'); no email sent.")
+                    skipped.append(person)
+                    continue
+                if resolved != name:
+                    print(f"   note: '{name}' matched Qlik value '{resolved}'.")
+                qlik_name = resolved
 
-            safe = "".join(c for c in name if c.isalnum() or c in " _-").strip()
+            safe = "".join(c for c in qlik_name if c.isalnum() or c in " _-").strip()
             img = os.path.join(OUTPUT_DIR, f"{i:02d}_{safe or 'employee'}.png")
 
-            print(f"[{i}/{len(people)}] {name} -> {recipient}")
+            print(f"[{i}/{len(people)}] {qlik_name} -> {recipient}")
             try:
-                capture(page, name, img)
-                status = send_email(name, recipient, img)
+                capture(page, qlik_name, img)
+                status = send_email(qlik_name, recipient, img)
                 print(f"   screenshot saved: {img}")
                 print(f"   email {status}")
                 succeeded.append((name, status))

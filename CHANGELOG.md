@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-08-26 (name-match safeguard: resolve recipients to exact Qlik value)
+- A recipient listed as "…Jr" didn't match Qlik's "…Jr." and was silently
+  SKIPPED (validation already did `strip().casefold()`, but not trailing-period /
+  whitespace differences). Just loosening validation would be worse — the name is
+  also the Qlik *selection* value, so a near-miss that passed validation would
+  select nothing and shoot the whole-company dashboard with dead deep links.
+- Fix: build `canon_map` (normalized name → exact Qlik value) from the values we
+  already fetch for validation, resolve each recipient through it, and use the
+  **exact Qlik value** for the screenshot selection, the greeting, and both deep
+  links. `_normalize_name()` is case-/whitespace-insensitive and ignores a
+  trailing period. Every adjustment is logged (`note: 'X' matched Qlik 'X.'`);
+  genuinely unknown names still skip. Only active when name validation is on.
+
 ## 2026-08-26 (email: detail link as text + browser note; faster capture)
 - The "detail of your performance" link now shows friendly text ("View your
   performance detail") instead of the raw URL, matching the named dashboard link.
