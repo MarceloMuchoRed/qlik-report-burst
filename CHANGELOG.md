@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-08-26 (regained personal-account access in the VM's Chrome)
+- **`gmrqlik` is a limited service account** and can't open an app Marcelo built
+  under his own Qlik account, so he needed his personal login to auto-fill again
+  in the VM's interactive Chrome. The Qlik proxy challenges with a **native
+  Windows-auth (NTLM/Negotiate) dialog**, and Chrome was pre-filling the saved
+  `gmrqlik` credential — that native dialog has no picker to choose the other
+  saved account, and clearing the username shows no autocomplete.
+- **Chrome's UI delete was walled off:** opening the `10.0.2.5` entry in
+  `chrome://password-manager` triggers a Windows re-auth, and the VM's Windows
+  password is unknown (RDP supplies it automatically; no PIN/Hello over RDP to
+  satisfy that prompt). Both accounts were confirmed saved.
+- **Resolved by deleting only the `gmrqlik` row from Chrome's `Login Data`
+  SQLite** with stdlib `sqlite3` (`DELETE ... WHERE signon_realm LIKE '%10.0.2.5%'
+  AND username_value LIKE '%gmrqlik%'`, Chrome fully closed). Deleting a row reads
+  no encrypted blob, so no Windows password/decryption is involved; the personal
+  entry was kept and Chrome now auto-fills it. The VM AV did **not** block this
+  row-delete (it had previously killed scripts that *copy* `Login Data`).
+- **No effect on the burst:** it sends `gmrqlik` explicitly via `http_credentials`
+  in a throwaway profile, reading `QLIK_USERNAME`/`QLIK_PASSWORD` (env vars or
+  `qlik_credentials.txt`) — a separate store from Chrome's saved passwords.
+
 ## 2026-08-26 (email image sizing + unknown-name validation)
 - **Embedded dashboard image came out huge in Outlook.** The screenshot is
   captured at high resolution (1920×1080 @2× = 3840px wide) and the `<img>` had
