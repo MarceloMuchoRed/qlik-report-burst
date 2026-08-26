@@ -74,6 +74,14 @@ EMAIL_HTML_BODY = """
 REVIEW_MODE = True                                # True = open drafts, don't send
 TEST_REDIRECT_EMAIL = "gerson@pennrosefarms.com"  # send all mail here; "" = real recipients
 MAX_EMPLOYEES = None                              # cap rows processed; None = all
+# When True, look up the real list of FILTER_FIELD values in Qlik up front and
+# skip any recipient whose name isn't among them. This matters because the Single
+# Integration API silently ignores an unknown selection value and renders the
+# whole-company dashboard instead of erroring — so an unknown name would be
+# emailed company-wide totals. Skipped names are reported at the end. If the
+# lookup can't run (e.g. engine unreachable), validation is disabled with a
+# warning and everyone is processed as before.
+VALIDATE_NAMES = True
 
 # Where screenshots are written (next to this script by default).
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "screenshots")
@@ -203,6 +211,114 @@ def ensure_logged_in(page):
               "(a domain account may need DOMAIN\\user or user@domain form).")
 
 
+def fetch_valid_field_values(page):
+    """Ask the Qlik engine for the full list of values in FILTER_FIELD, so we can
+    tell which recipient names actually exist. Returns a set of value strings, or
+    None if the lookup couldn't be performed (validation is then skipped).
+
+    Uses the engine JSON-RPC API over a WebSocket opened from inside the already
+    authenticated browser page, so the same Windows-auth session cookie is reused
+    (no second login). It opens the app, creates a session list object on the
+    field, and reads back its values.
+    """
+    base = TENANT_URL.rstrip("/")
+    if base.startswith("https://"):
+        ws_url = "wss://" + base[len("https://"):]
+    elif base.startswith("http://"):
+        ws_url = "ws://" + base[len("http://"):]
+    else:
+        ws_url = "ws://" + base
+    ws_url = ws_url + "/app/" + APP_ID
+
+    js = r"""
+    async ({ wsUrl, field }) => {
+      const TIMEOUT_MS = 20000;
+      const ws = new WebSocket(wsUrl);
+      const pending = {};
+      let idc = 0;
+      ws.onmessage = (ev) => {
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch (e) { return; }
+        if (msg.id && pending[msg.id]) {
+          const cb = pending[msg.id];
+          delete pending[msg.id];
+          cb(msg);
+        }
+      };
+      const opened = new Promise((resolve, reject) => {
+        ws.onopen = () => resolve();
+        ws.onerror = () => reject(new Error('websocket connection failed'));
+      });
+      const timeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('engine lookup timed out')), TIMEOUT_MS));
+      const call = (handle, method, params) => new Promise((resolve, reject) => {
+        const id = ++idc;
+        pending[id] = (msg) => {
+          if (msg.error) reject(new Error((msg.error && msg.error.message) || 'engine error'));
+          else resolve(msg.result);
+        };
+        ws.send(JSON.stringify({ jsonrpc: '2.0', id, handle, method, params }));
+      });
+      const run = (async () => {
+        await opened;
+        // A /app/<id> socket opens that app automatically; grab its handle.
+        let docHandle = -1;
+        try {
+          const active = await call(-1, 'GetActiveDoc', []);
+          if (active && active.qReturn && typeof active.qReturn.qHandle === 'number'
+              && active.qReturn.qHandle >= 0) {
+            docHandle = active.qReturn.qHandle;
+          }
+        } catch (e) { /* fall through to OpenDoc */ }
+        if (docHandle < 0) {
+          const od = await call(-1, 'OpenDoc', ['APPID_PLACEHOLDER', '', '', '', false]);
+          docHandle = od.qReturn.qHandle;
+        }
+        const obj = await call(docHandle, 'CreateSessionObject', [{
+          qInfo: { qType: 'ListObject' },
+          qListObjectDef: {
+            qDef: { qFieldDefs: [field] },
+            qInitialDataFetch: [{ qTop: 0, qLeft: 0, qHeight: 10000, qWidth: 1 }]
+          }
+        }]);
+        const objHandle = obj.qReturn.qHandle;
+        const layout = await call(objHandle, 'GetLayout', []);
+        const lo = layout.qLayout.qListObject;
+        const total = (lo.qSize && typeof lo.qSize.qcy === 'number') ? lo.qSize.qcy : null;
+        const values = [];
+        for (const dp of (lo.qDataPages || [])) {
+          for (const row of dp.qMatrix) {
+            for (const cell of row) {
+              if (cell && cell.qText !== undefined && !cell.qIsNull) values.push(cell.qText);
+            }
+          }
+        }
+        ws.close();
+        return { values, total };
+      })();
+      return await Promise.race([run, timeout]);
+    }
+    """.replace("APPID_PLACEHOLDER", APP_ID)
+
+    try:
+        result = page.evaluate(js, {"wsUrl": ws_url, "field": FILTER_FIELD})
+    except Exception as e:
+        print(f"   ! couldn't read '{FILTER_FIELD}' values from the Qlik engine "
+              f"({e}); name validation is DISABLED for this run.")
+        return None
+
+    values = (result or {}).get("values") or []
+    total = (result or {}).get("total")
+    if not values:
+        print(f"   ! the Qlik engine returned no values for '{FILTER_FIELD}'; "
+              f"name validation is DISABLED for this run.")
+        return None
+    if total and len(values) >= 10000 and total > len(values):
+        print(f"   ! '{FILTER_FIELD}' has {total} values but only the first "
+              f"{len(values)} were read; some names may be flagged wrongly.")
+    return set(values)
+
+
 def capture(page, employee_name, out_path):
     """Load the filtered single view, wait for the Qlik objects to finish
     rendering, then screenshot it."""
@@ -308,9 +424,28 @@ def main():
 
         ensure_logged_in(page)
 
+        # Look up the real field values so unknown names are caught before they
+        # render (and get emailed) the whole-company dashboard. None = lookup
+        # unavailable, so we don't enforce it.
+        valid_norm = None
+        if VALIDATE_NAMES:
+            print(f"Checking recipient names against Qlik '{FILTER_FIELD}'...")
+            valid_values = fetch_valid_field_values(page)
+            if valid_values is not None:
+                valid_norm = {v.strip().casefold() for v in valid_values}
+                print(f"   {len(valid_norm)} value(s) found in Qlik.")
+
+        skipped = []
         for i, person in enumerate(people, 1):
             name = person["name"]
             recipient = TEST_REDIRECT_EMAIL or person["email"]
+
+            if valid_norm is not None and name.strip().casefold() not in valid_norm:
+                print(f"[{i}/{len(people)}] {name} -> SKIPPED "
+                      f"(not found in Qlik '{FILTER_FIELD}'); no email sent.")
+                skipped.append(person)
+                continue
+
             safe = "".join(c for c in name if c.isalnum() or c in " _-").strip()
             img = os.path.join(OUTPUT_DIR, f"{i:02d}_{safe or 'employee'}.png")
 
@@ -325,6 +460,12 @@ def main():
 
         context.close()
         browser.close()
+
+    if skipped:
+        print(f"\n{len(skipped)} recipient(s) skipped — name not found in Qlik "
+              f"'{FILTER_FIELD}':")
+        for person in skipped:
+            print(f"   - {person['name']} ({person['email']})")
 
     print("\nDone. Review the drafts in Outlook (REVIEW_MODE) or check Sent.")
 
