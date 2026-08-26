@@ -86,6 +86,7 @@ EMAIL_HTML_BODY = """
 REVIEW_MODE = True                                # True = open drafts, don't send
 TEST_REDIRECT_EMAIL = "gerson@pennrosefarms.com"  # send all mail here; "" = real recipients
 MAX_EMPLOYEES = None                              # cap rows processed; None = all
+RUN_ID_PREFLIGHT = False                          # verify app/sheet IDs first; opens an EXTRA engine session
 # When True, look up the real list of FILTER_FIELD values in Qlik up front and
 # skip any recipient whose name isn't among them. This matters because the Single
 # Integration API silently ignores an unknown selection value and renders the
@@ -595,20 +596,24 @@ def main():
         ensure_logged_in(page)
 
         # Preflight: verify the app and sheet IDs exist before doing any work.
-        print("Verifying app/sheet IDs...")
-        ids = verify_ids(page)
-        if ids is not None:
-            if ids.get("appOk") is False:
-                sys.exit(f"App ID not found in Qlik: {APP_ID}. Check APP_ID in CONFIG.")
-            sheets = ids.get("sheets")
-            if sheets is not None:
-                missing = [s for s in {SHEET_ID, DETAIL_SHEET_ID} if s and s not in sheets]
-                if missing:
-                    sys.exit("Sheet ID(s) not found in the app: " + ", ".join(missing)
-                             + ". Check SHEET_ID / DETAIL_SHEET_ID in CONFIG.")
-                print(f"   app + {len(sheets)} sheet(s) OK.")
-            else:
-                print("   app opened, but couldn't list sheets; skipping sheet check.")
+        # OFF by default — it opens an EXTRA engine session, which on an access-
+        # limited service account (e.g. gmrqlik) can starve the first capture's
+        # session and surface "a resource could not be found". Flip on to use it.
+        if RUN_ID_PREFLIGHT:
+            print("Verifying app/sheet IDs...")
+            ids = verify_ids(page)
+            if ids is not None:
+                if ids.get("appOk") is False:
+                    sys.exit(f"App ID not found in Qlik: {APP_ID}. Check APP_ID in CONFIG.")
+                sheets = ids.get("sheets")
+                if sheets is not None:
+                    missing = [s for s in {SHEET_ID, DETAIL_SHEET_ID} if s and s not in sheets]
+                    if missing:
+                        sys.exit("Sheet ID(s) not found in the app: " + ", ".join(missing)
+                                 + ". Check SHEET_ID / DETAIL_SHEET_ID in CONFIG.")
+                    print(f"   app + {len(sheets)} sheet(s) OK.")
+                else:
+                    print("   app opened, but couldn't list sheets; skipping sheet check.")
 
         # Look up the real field values so unknown names are caught before they
         # render (and get emailed) the whole-company dashboard, and so a recipient
