@@ -62,6 +62,11 @@ EMAIL_COLUMN = "Email"
 # {detail_url} = link to the detail sheet (DETAIL_SHEET_ID); both are personalized
 # to the employee. The image embeds inline via the cid referenced in the body.
 EMAIL_SUBJECT = "Sales Report {date}"
+# People CC'd on EVERY email (same for all recipients). Leave empty for none.
+# These are static, so they live here rather than as a per-row column in the
+# recipients file. Suppressed automatically when TEST_REDIRECT_EMAIL is set, so
+# test runs don't spam them.
+CC_ADDRESSES = ["", ""]
 # On-screen display width of the embedded image, in pixels. The screenshot is
 # captured at high resolution (VIEWPORT_WIDTH x DEVICE_SCALE), so Outlook would
 # otherwise show it at its full pixel width. Setting a width downscales it in the
@@ -484,6 +489,12 @@ def send_email(name, to_address, image_path):
     outlook = win32com.client.Dispatch("Outlook.Application")
     mail = outlook.CreateItem(0)  # 0 = olMailItem
     mail.To = to_address
+    # CC the fixed list, but not on test runs (where everything is redirected to
+    # a single test inbox and CCing the real people would be noise).
+    if not TEST_REDIRECT_EMAIL:
+        cc = "; ".join(a.strip() for a in CC_ADDRESSES if a and a.strip())
+        if cc:
+            mail.CC = cc
     today = date.today()
     mail.Subject = EMAIL_SUBJECT.format(date=f"{today.month}/{today.day}/{today.year}")
 
