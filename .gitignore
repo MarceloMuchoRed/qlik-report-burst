@@ -11,6 +11,9 @@ qlik_credentials.txt
 recipients.xlsm
 recipients.csv
 
+# --- Office temp/lock files (created while a workbook is open) ----------------
+~$*
+
 # --- Python --------------------------------------------------------------
 __pycache__/
 *.py[cod]
